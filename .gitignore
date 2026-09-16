@@ -1,0 +1,29 @@
+# Generated artwork. build_cursors.py recreates all of it, and committing 17 MB
+# of .cur/.ani that changes on every colour tweak would make the history useless.
+cursors/
+
+# Personal. Restore points record the pointers THIS machine had before the tool
+# ran, including absolute paths under the user's profile. Never publish these.
+restore_point/
+
+# Local state and scratch
+panel_settings.json
+click_effect.pid
+click_effect.pid.test
+click_effect.log
+panel_preview.png
+panel_gallery.png
+proof_live_cursors.png
+preview_pick.png
+preview_roles.png
+new_*.png
+zoom_*.png
+debug_*.png
+_*.png
+_vidframes/
+picker_remove.html
+picker_keep.html
+
+# Python
+__pycache__/
+*.pyc
