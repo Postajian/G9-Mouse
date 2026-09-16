@@ -505,6 +505,154 @@ def cmd_effect(a):
     return out(ok=True, effect=running)
 
 
+
+TRAIL_PREVIEW = os.path.join(HERE, "panel_trail.png")
+
+# A typical fast swipe, used to turn the tail's LENGTH (a time) into a streak
+# length (a distance) for the still preview. Measured by hand: a deliberate
+# flick across a monitor runs about this fast.
+PREVIEW_SPEED = 1200.0      # pixels per second
+
+
+def render_trail_preview(cfg):
+    """Draw the tail as it will really look, and show what each knob controls.
+
+    Two halves, because a streak alone cannot show a width. Left is a magnified
+    CROSS-SECTION - a slice straight through the tail - where core, glow and
+    spread are visible as sizes you can compare. Right is the tail itself at
+    true scale, with its length marked.
+
+    Deliberately rendered through neon_trail's own _bitmap rather than a
+    lookalike: a preview drawn by separate code shows what someone THINKS the
+    setting does. This is the code that paints your screen, composited over a
+    dark strip, so a wrong preview means a wrong tail.
+    """
+    import math
+
+    from PIL import Image, ImageChops, ImageDraw, ImageFont
+
+    import neon_trail as NT
+
+    W, H = 660, 170
+    BG = (18, 18, 18)
+    INK = (150, 158, 168)
+    LIT = (236, 214, 120)
+    WARN = (255, 150, 90)
+    SPLIT = 250
+    BAR_X0, BAR_X1 = 22, 128           # the slice is this wide
+    TICK = BAR_X1 + 6                  # brackets hang off the right of it
+
+    trail = NT.from_settings(cfg)
+    sheet = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(sheet)
+    try:
+        f = ImageFont.truetype(TIMES, 12)
+        fs = ImageFont.truetype(TIMES, 11)
+    except OSError:
+        f = fs = ImageFont.load_default()
+
+    core_rgb = NT.hex_rgb(cfg.get("coreColour"), (238, 248, 255))
+    glow_rgb = NT.hex_rgb(cfg.get("glowColour"), (130, 195, 255))
+    gap, core, glow = cfg["gap"], cfg["core"], cfg["glow"]
+    contrast = cfg["contrast"] / 100.0
+
+    # ------------------------------------------------------- cross-section
+    d.text((BAR_X0, 6), "A SLICE THROUGH THE TAIL", font=fs, fill=INK)
+    reach = gap + max(core, glow) / 2.0
+    # Bounded so the slice can never grow into the captions below it, at any
+    # combination of the knobs. SPREAD 0 with a fat glow used to print its
+    # caption straight through the CONTRAST line.
+    # Shrinks as well as magnifies. Floored at 1.0 it could not fit the widest
+    # tail - SPREAD 40 with GLOW 48 drew straight through the title.
+    zoom = max(0.2, min(6.0, 30.0 / max(1.0, reach)))
+    mid = 62
+    rails = [mid - gap * zoom, mid + gap * zoom] if gap else [mid]
+
+    def band(y, half, rgb, k):
+        c = tuple(min(255, int(v * k)) for v in rgb)
+        d.rectangle([BAR_X0, y - half, BAR_X1, y + half], fill=c)
+
+    for ry in rails:
+        band(ry, glow * zoom / 2.0, glow_rgb, min(1.0, 0.30 * contrast + 0.18))
+        band(ry, core * zoom / 2.0, core_rgb, min(1.0, 0.92 * contrast))
+
+    def bracket(ya, yb, text, colour=LIT):
+        d.line([(TICK, ya), (TICK, yb)], fill=INK)
+        d.line([(TICK, ya), (TICK - 4, ya)], fill=INK)
+        d.line([(TICK, yb), (TICK - 4, yb)], fill=INK)
+        d.text((TICK + 6, (ya + yb) / 2 - 8), text, font=f, fill=colour)
+
+    # One band per rail when there are two, so the labels never sit on top of
+    # each other; the bands are identical on both rails anyway.
+    captions = []
+    if len(rails) == 2:
+        bracket(rails[0] - glow * zoom / 2.0, rails[0] + glow * zoom / 2.0,
+                "GLOW %d px" % glow)
+        bracket(rails[1] - core * zoom / 2.0, rails[1] + core * zoom / 2.0,
+                "CORE %d px" % core)
+        d.line([(BAR_X0 - 8, rails[0]), (BAR_X0 - 8, rails[1])], fill=INK)
+        captions.append(("SPREAD %d px apart" % gap, LIT, f))
+    else:
+        bracket(mid - glow * zoom / 2.0, mid + glow * zoom / 2.0, "GLOW %d px" % glow)
+        captions.append(("CORE %d px inside it" % core, LIT, f))
+        captions.append(("SPREAD 0  -  one line, not two", LIT, f))
+
+    captions.append(("CONTRAST %d%%  -  how hard it burns" % cfg["contrast"], LIT, f))
+    if glow <= core:
+        # Worth saying out loud: the glow is doing nothing at these numbers.
+        captions.append(("glow is inside the core, so it cannot be seen", WARN, fs))
+
+    # Stacked from one cursor rather than placed at fixed offsets, so the count
+    # of lines can change without two of them landing on the same row.
+    cap_y = min(mid + reach * zoom + 12, H - 16 * len(captions) - 8)
+    for text, colour, font in captions:
+        d.text((BAR_X0, cap_y), text, font=font, fill=colour)
+        cap_y += 16
+    d.line([(SPLIT, 6), (SPLIT, H - 6)], fill=(70, 70, 70))
+
+    # ------------------------------------------------------- the real thing
+    d.text((SPLIT + 18, 6), "AT TRUE SIZE, BEHIND THE POINTER", font=fs, fill=INK)
+    head_x, head_y = W - 46, 70
+    streak = max(26.0, min(W - SPLIT - 96.0, cfg["ms"] / 1000.0 * PREVIEW_SPEED))
+    n = 26
+    pts = [(head_x - streak * (1.0 - i / float(n - 1)),
+            head_y + 12.0 * math.sin((1.0 - i / float(n - 1)) * 2.2))
+           for i in range(n)]
+
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    pad = NT.MARGIN
+    x0, y0 = int(min(xs) - pad), int(min(ys) - pad)
+    bw, bh = int(max(xs) - min(xs)) + pad * 2, int(max(ys) - min(ys)) + pad * 2
+    layer = trail._bitmap(pts, x0, y0, bw, bh)
+
+    patch = sheet.crop((x0, y0, x0 + bw, y0 + bh))
+    inv = ImageChops.invert(layer.getchannel("A"))
+    # Premultiplied source over background: out = src + bg * (1 - alpha).
+    under = Image.merge("RGB", [ImageChops.multiply(c, inv) for c in patch.split()])
+    over = Image.merge("RGB", [ImageChops.add(a, b) for a, b in
+                               zip(layer.convert("RGB").split(), under.split())])
+    sheet.paste(over, (x0, y0))
+
+    d = ImageDraw.Draw(sheet)
+    d.ellipse([head_x - 3, head_y - 3, head_x + 3, head_y + 3],
+              fill=(255, 255, 255), outline=(40, 40, 40))
+
+    ya, xa, xb = H - 40, head_x - streak, head_x
+    d.line([(xa, ya), (xb, ya)], fill=INK)
+    for x, dx in ((xa, 4), (xb, -4)):
+        d.line([(x, ya), (x + dx, ya - 3)], fill=INK)
+        d.line([(x, ya), (x + dx, ya + 3)], fill=INK)
+        d.line([(x, ya - 5), (x, ya + 5)], fill=INK)
+    d.text(((xa + xb) / 2, ya + 5), "LENGTH %d ms" % cfg["ms"], font=f,
+           anchor="ma", fill=LIT)
+    d.text((W - 8, H - 20), "at a fast swipe", font=fs, anchor="ra", fill=INK)
+
+    d.rectangle([0, 0, W - 1, H - 1], outline=(70, 70, 70))
+    sheet.save(TRAIL_PREVIEW)
+    return TRAIL_PREVIEW
+
+
 def cmd_trail(a):
     """Write the tail settings. The helper notices the file changed and picks
     them up on its next frame, so there is nothing to restart."""
@@ -520,7 +668,13 @@ def cmd_trail(a):
             t[key] = v
     s["trail"] = clamp_trail(t)
     save_settings(s)
-    return out(ok=True, trail=s["trail"])
+    # Rendered on every change, so the panel can show what the numbers did
+    # rather than asking the user to spin the mouse and guess.
+    try:
+        shot = render_trail_preview(s["trail"])
+    except Exception:
+        shot = ""
+    return out(ok=True, trail=s["trail"], preview=shot)
 
 
 def main():

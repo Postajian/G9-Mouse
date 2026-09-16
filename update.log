@@ -52,3 +52,12 @@
   live pointer matches every file on disk
   pushed: G9 Mouse: customisable tail (length, width, spread, contrast, colours), typed per RED RULE 10
 
+[2026-09-16 18:18:23] G9 Mouse update
+  artwork rebuilt: 105 files
+  every file parses, hotspot centred, Windows loads it
+  spin latches, survives release, stops on next click
+  every set is reachable, uniquely named, and the gesture cycles them
+  neon trail paints real screen pixels at 30+ fps
+  live pointer matches every file on disk
+  pushed: G9 Mouse: test_sets restores the pointer instead of leaving it on the first set
+
