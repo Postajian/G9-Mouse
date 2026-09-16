@@ -283,7 +283,7 @@ def normalise_glyph(polys):
 
 def _glyph_for(role):
     """The raw mark for a role, before it is normalised to one size."""
-    if role in ("Arrow", "Hand", "Help", "Wait", "AppStarting"):
+    if role in ("Arrow", "Hand", "Help", "NWPen", "Wait", "AppStarting"):
         return []
     if role == "IBeam":
         return [rect(60, 40, 68, 88), rect(52, 40, 76, 47), rect(52, 81, 76, 88)]
@@ -306,9 +306,6 @@ def _glyph_for(role):
         return [rotate(p, -45) for p in _dbl_arrow_ns()]
     if role == "SizeAll":
         return _size_all()
-    if role == "NWPen":
-        return [[(42, 86), (49, 61), (67, 79)],
-                [(55, 55), (73, 73), (86, 58), (68, 40)]]
     raise ValueError("unknown role " + role)
 
 

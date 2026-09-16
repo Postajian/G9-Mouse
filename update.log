@@ -5,3 +5,17 @@
   live pointer matches every file on disk
   pushed: G9 Mouse update 2026-09-16 16:54
 
+[2026-09-16 16:57:57] G9 Mouse update
+  artwork rebuilt: 70 files
+  every file parses, hotspot centred, Windows loads it
+  spin latches, survives release, stops on next click
+  live pointer matches every file on disk
+  pushed: No is a white cross; every centre mark normalised to one span
+
+[2026-09-16 17:00:17] G9 Mouse update
+  artwork rebuilt: 70 files
+  every file parses, hotspot centred, Windows loads it
+  spin latches, survives release, stops on next click
+  live pointer matches every file on disk
+  push skipped (-NoPush)
+
