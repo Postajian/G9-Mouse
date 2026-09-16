@@ -24,7 +24,8 @@ SETTINGS = os.path.join(HERE, "panel_settings.json")
 PREVIEW = os.path.join(HERE, "panel_preview.png")
 
 DEFAULTS = {"variant": "octagram", "colourA": "#00d9ff", "colourB": "#ff7a18",
-            "size": 32, "effect": False, "restClose": 17, "pressClose": 27}
+            "size": 32, "effect": False, "restClose": 17, "pressClose": 27,
+            "trail": None}      # filled from TRAIL_DEFAULTS by load_settings
 
 # Reticle bracket spacing, as whole percents pulled toward the centre. Any
 # value in range is accepted - the panel lets you type one - and this list is
@@ -34,6 +35,58 @@ CLOSE_MIN, CLOSE_MAX = 0, 60
 
 
 SIZE_MIN, SIZE_MAX = 12, 256
+
+# The light tail, as ONE table: the panel builds its boxes from this, the CLI
+# builds its arguments from it, and the helper clamps with it. Adding a knob is
+# a row here and nothing else. Every entry is a number the user types, per
+# RED RULE 10 - the only picked values are the two colours, which come from the
+# Windows colour dialog because a colour is not a number on a scale.
+#   key, label, min, max, suffix, help
+TRAIL_SPEC = [
+    ("ms",        "LENGTH",    40,  2000, "ms",
+     "How far back the tail reaches, in milliseconds of travel. Longer = longer streak."),
+    ("core",      "CORE",       1,    24, "px",
+     "Width of the bright inner line."),
+    ("glow",      "GLOW",       1,    48, "px",
+     "Width of the soft outer bloom. Below the core width the glow disappears."),
+    ("gap",       "SPREAD",     0,    40, "px",
+     "Half the distance between the two rails. 0 draws them as one line."),
+    ("contrast",  "CONTRAST",  10,   200, "%",
+     "How strongly the tail burns against the screen. 100 is the default mix."),
+]
+TRAIL_COLOURS = [
+    ("coreColour", "CORE HUE", "The bright centre of the tail."),
+    ("glowColour", "GLOW HUE", "The soft bloom around it."),
+]
+TRAIL_DEFAULTS = {"ms": 300, "core": 3, "glow": 11, "gap": 7, "contrast": 100,
+                  "coreColour": "#eef8ff", "glowColour": "#82c3ff"}
+
+
+def clamp_trail(raw):
+    """Take whatever the panel sent and return a complete, in-range tail.
+
+    Never raises and never returns a partial dict: the helper reads this on a
+    file change, and a half-written settings file must degrade to the default
+    tail rather than stop the overlay."""
+    out_ = dict(TRAIL_DEFAULTS)
+    if isinstance(raw, dict):
+        for key, _lab, lo, hi, _sfx, _help in TRAIL_SPEC:
+            if key in raw:
+                try:
+                    out_[key] = max(lo, min(hi, int(round(float(raw[key])))))
+                except (TypeError, ValueError):
+                    pass
+        for key, _lab, _help in TRAIL_COLOURS:
+            v = str(raw.get(key, "")).strip()
+            if len(v) == 7 and v[0] == "#":
+                try:
+                    int(v[1:], 16)
+                    out_[key] = v.lower()
+                except ValueError:
+                    pass
+    return out_
+
+
 
 
 def clamp_size(v):
@@ -88,6 +141,7 @@ def load_settings():
     if s.get("variant") not in B.VARIANTS:
         s["variant"] = DEFAULTS["variant"]
     s["size"] = clamp_size(s.get("size", DEFAULTS["size"]))
+    s["trail"] = clamp_trail(s.get("trail"))
     return s
 
 
@@ -156,6 +210,12 @@ def cmd_status(_a):
                variants=[{"id": v, "label": label_for(v)} for v in B.VARIANTS],
                sizes=SIZES, closes=CLOSES,
                sizeMin=SIZE_MIN, sizeMax=SIZE_MAX,
+               trail=s["trail"],
+               trailSpec=[{"key": k, "label": lab, "min": lo, "max": hi,
+                           "suffix": sfx, "help": hlp}
+                          for k, lab, lo, hi, sfx, hlp in TRAIL_SPEC],
+               trailColours=[{"key": k, "label": lab, "help": hlp}
+                             for k, lab, hlp in TRAIL_COLOURS],
                restClose=clamp_close(s["restClose"]),
                pressClose=clamp_close(s["pressClose"]),
                closeMin=CLOSE_MIN, closeMax=CLOSE_MAX,
@@ -445,6 +505,24 @@ def cmd_effect(a):
     return out(ok=True, effect=running)
 
 
+def cmd_trail(a):
+    """Write the tail settings. The helper notices the file changed and picks
+    them up on its next frame, so there is nothing to restart."""
+    s = load_settings()
+    t = dict(s["trail"])
+    for key, _lab, _lo, _hi, _sfx, _help in TRAIL_SPEC:
+        v = getattr(a, key, None)
+        if v is not None:
+            t[key] = v
+    for key, _lab, _help in TRAIL_COLOURS:
+        v = getattr(a, key, None)
+        if v:
+            t[key] = v
+    s["trail"] = clamp_trail(t)
+    save_settings(s)
+    return out(ok=True, trail=s["trail"])
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -458,6 +536,12 @@ def main():
         p.add_argument("--size", type=clamp_size)
         p.add_argument("--rest-close", type=clamp_close)
         p.add_argument("--press-close", type=clamp_close)
+    pt = sub.add_parser("trail")
+    for key, _lab, _lo, _hi, _sfx, _help in TRAIL_SPEC:
+        pt.add_argument("--" + key, type=float)     # clamped in cmd_trail
+    for key, _lab, _help in TRAIL_COLOURS:
+        pt.add_argument("--" + key.replace("Colour", "-colour"))
+
     pe = sub.add_parser("effect")
     pe.add_argument("--state", choices=["on", "off", "status"], default="status")
 
@@ -466,7 +550,7 @@ def main():
         return {"status": cmd_status, "preview": cmd_preview, "apply": cmd_apply,
                 "default": cmd_default, "stock": cmd_stock,
                 "gallery": cmd_gallery,
-                "effect": cmd_effect}[a.cmd](a)
+                "effect": cmd_effect, "trail": cmd_trail}[a.cmd](a)
     except Exception as e:                      # the panel must always get JSON
         return out(ok=False, error="%s: %s" % (type(e).__name__, e))
 

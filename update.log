@@ -34,3 +34,12 @@
   live pointer matches every file on disk
   pushed: Neon trail: silver-on-ice light trail while the spin is latched
 
+[2026-09-16 17:49:46] G9 Mouse update
+  artwork rebuilt: 105 files
+  every file parses, hotspot centred, Windows loads it
+  spin latches, survives release, stops on next click
+  every set is reachable, uniquely named, and the gesture cycles them
+  neon trail paints real screen pixels at 30+ fps
+  live pointer matches every file on disk
+  pushed: G9 Mouse: third set ARROW, typed SIZE, one source for the set list
+

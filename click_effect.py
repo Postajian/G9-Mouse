@@ -19,6 +19,7 @@ Two deliberate choices:
 
 import atexit
 import ctypes
+import json
 import os
 import signal
 import struct
@@ -82,10 +83,35 @@ VK_ADD = 0x6B
 PANEL_TAPS = 3
 PANEL_WINDOW = 0.9
 
-# The light trail that follows the pointer while the spin is latched.
-TRAIL_SECONDS = 0.30      # how far back the tail reaches, in time not pixels
+# The light trail that follows the pointer while the spin is latched. Its shape
+# is the user's, typed in the panel, so the numbers here are only the fallback
+# used when the settings file is missing or unreadable.
 TRAIL_FPS = 60.0
 TRAIL_MIN_MOVE = 3        # pixels; below this the pointer is parked, not moving
+SETTINGS = os.path.join(HERE, "panel_settings.json")
+
+# (settings mtime, tail dict, live overlay). Re-read only when the file changes:
+# the panel applies on every keystroke-commit, and the helper must follow along
+# without being restarted, but a JSON read every frame at 60 fps is waste.
+_trail_cfg = [0.0, None, None]
+
+
+def trail_settings():
+    """The tail the user typed, re-read when panel_settings.json changes."""
+    try:
+        stamp = os.path.getmtime(SETTINGS)
+    except OSError:
+        stamp = 0.0
+    if stamp != _trail_cfg[0] or _trail_cfg[1] is None:
+        import cursor_cli
+        try:
+            raw = json.load(open(SETTINGS, encoding="utf-8")).get("trail")
+        except (OSError, ValueError):
+            raw = None
+        _trail_cfg[0] = stamp
+        _trail_cfg[1] = cursor_cli.clamp_trail(raw)
+        _trail_cfg[2] = None            # shape changed, rebuild the overlay
+    return _trail_cfg[1]
 PANEL_APP = os.path.join(os.path.dirname(HERE), "G9 PC Control", "App", "Main.ps1")
 
 
@@ -188,16 +214,22 @@ def trail_step(trail, points, now):
     and a missing overlay must never take the cursor swapping down with it.
     """
     try:
-        if trail is None:
-            import neon_trail
-            trail = neon_trail.NeonTrail()
-        else:
-            import neon_trail
+        import neon_trail
+        cfg = trail_settings()
+        if trail is None or _trail_cfg[2] is not trail:
+            # Rebuilt whenever the typed shape changes, so a new width or
+            # colour shows on the very next move rather than after a restart.
+            if trail is not None:
+                trail.hide()
+                trail.destroy()
+            trail = neon_trail.from_settings(cfg)
+            _trail_cfg[2] = trail
 
         x, y = neon_trail.cursor_pos()
         if not points or abs(x - points[-1][0]) + abs(y - points[-1][1]) >= 1:
             points.append((x, y, now))
-        while points and now - points[0][2] > TRAIL_SECONDS:
+        span = cfg["ms"] / 1000.0
+        while points and now - points[0][2] > span:
             points.pop(0)
 
         if now - _trail_last[0] < 1.0 / TRAIL_FPS:

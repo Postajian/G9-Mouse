@@ -32,6 +32,11 @@ With the helper running, the mouse itself drives the pointer:
 |---|---|
 | Hold one button | The pressed artwork |
 | Hold left, tap right twice | Switches to the next set, wrapping |
+
+The tail itself is yours: length, core and glow width, rail spread, contrast and
+both colours are typed in the panel and picked up by the running helper on its
+next frame, with no restart. `python cursor_cli.py trail --ms 600 --core 5` does
+the same from the command line.
 | Both buttons | Latches into a spin. Let go and it keeps turning; the next click stops it. Steps up a gear every 2 s through 5 gears |
 | Hold LEFT, tap RIGHT twice | Switch to the next cursor set |
 | Triple-tap numpad `+` | Open the control panel at the pointer |

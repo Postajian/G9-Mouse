@@ -39,6 +39,9 @@ HWND_TOPMOST = -1
 
 MARGIN = 26          # room for the glow to bleed past the end points
 
+# The one WNDPROC for the one registered window class. See _register.
+_PROC = None
+
 
 class BLENDFUNCTION(ctypes.Structure):
     _fields_ = [("BlendOp", ctypes.c_ubyte), ("BlendFlags", ctypes.c_ubyte),
@@ -67,6 +70,33 @@ class WNDCLASS(ctypes.Structure):
                 ("lpszMenuName", wintypes.LPCWSTR), ("lpszClassName", wintypes.LPCWSTR)]
 
 
+def hex_rgb(value, fallback=(255, 255, 255)):
+    """#rrggbb to a tuple. Anything unreadable falls back rather than raising:
+    the tail is decoration and must never take the cursor helper down."""
+    try:
+        v = str(value).strip().lstrip("#")
+        return (int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16))
+    except (TypeError, ValueError, IndexError):
+        return fallback
+
+
+def _a8(value):
+    """Clamp an alpha to a byte. Contrast above 100% pushes the core past 255,
+    and PIL raises on that rather than saturating."""
+    return max(0, min(255, int(value)))
+
+
+def from_settings(t):
+    """Build a trail from the panel's saved tail dict."""
+    t = t or {}
+    return NeonTrail(gap=int(t.get("gap", 7)),
+                     core=int(t.get("core", 3)),
+                     glow=int(t.get("glow", 11)),
+                     core_rgb=hex_rgb(t.get("coreColour"), (238, 248, 255)),
+                     glow_rgb=hex_rgb(t.get("glowColour"), (130, 195, 255)),
+                     contrast=int(t.get("contrast", 100)))
+
+
 class NeonTrail(object):
     """Owns one overlay window. Cheap to hide, so it is kept between spins."""
 
@@ -74,7 +104,8 @@ class NeonTrail(object):
     _registered = False
 
     def __init__(self, gap=7, core=3, glow=11,
-                 core_rgb=(238, 248, 255), glow_rgb=(130, 195, 255)):
+                 core_rgb=(238, 248, 255), glow_rgb=(130, 195, 255),
+                 contrast=100):
         # Tron: a near-white silver core inside an ice-blue bloom. A saturated
         # cyan core looked like a highlighter; the light centre is what reads as
         # a light trail rather than a drawn line.
@@ -83,14 +114,15 @@ class NeonTrail(object):
         self.glow = glow            # soft outer line width
         self.core_rgb = core_rgb
         self.glow_rgb = glow_rgb
+        self.contrast = contrast    # percent; 100 is the mix the tail shipped with
         self.hwnd = None
-        self._proc = None           # kept alive: a GC'd WNDPROC crashes Windows
 
     # ---------------------------------------------------------------- window
 
     def _register(self):
         if NeonTrail._registered:
             return
+        global _PROC
         # argtypes must be declared. Without them ctypes guesses, and a 64-bit
         # LPARAM overflows on the way back into DefWindowProcW - every single
         # message to the window raised OverflowError. The window still appeared,
@@ -98,9 +130,15 @@ class NeonTrail(object):
         u32.DefWindowProcW.restype = ctypes.c_longlong
         u32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT,
                                        ctypes.c_ulonglong, ctypes.c_longlong]
-        self._proc = WNDPROC(lambda h, m, w, l: u32.DefWindowProcW(h, m, w, l))
+        # Module level, not per instance. The window CLASS is registered once
+        # for the whole process, so the callback it points at must outlive any
+        # single trail. Holding it on self meant that destroying the first
+        # NeonTrail freed the callback while the class still referenced it, and
+        # the next trail created from that class crashed the process outright
+        # (STATUS_FATAL_USER_CALLBACK_EXCEPTION, 0xC000041D) rather than raising.
+        _PROC = WNDPROC(lambda h, m, w, l: u32.DefWindowProcW(h, m, w, l))
         wc = WNDCLASS()
-        wc.lpfnWndProc = self._proc
+        wc.lpfnWndProc = _PROC
         wc.hInstance = ctypes.windll.kernel32.GetModuleHandleW(None)
         wc.lpszClassName = self.CLASS_NAME
         if not u32.RegisterClassW(ctypes.byref(wc)):
@@ -154,11 +192,12 @@ class NeonTrail(object):
 
             fade = (i + 1) / float(n)            # newest segment brightest
             for ox, oy in ((px, py), (-px, -py)):
+                k = self.contrast / 100.0
                 d.line([(ax + ox, ay + oy), (bx + ox, by + oy)],
-                       fill=self.glow_rgb + (int(70 * fade),),
+                       fill=self.glow_rgb + (_a8(70 * fade * k),),
                        width=self.glow, joint="curve")
                 d.line([(ax + ox, ay + oy), (bx + ox, by + oy)],
-                       fill=self.core_rgb + (int(235 * fade),),
+                       fill=self.core_rgb + (_a8(235 * fade * k),),
                        width=self.core, joint="curve")
 
         # UpdateLayeredWindow expects premultiplied alpha.
