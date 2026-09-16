@@ -81,6 +81,11 @@ GESTURE_WINDOW = 1.2      # taps further apart than this start a new count
 VK_ADD = 0x6B
 PANEL_TAPS = 3
 PANEL_WINDOW = 0.9
+
+# The light trail that follows the pointer while the spin is latched.
+TRAIL_SECONDS = 0.30      # how far back the tail reaches, in time not pixels
+TRAIL_FPS = 60.0
+TRAIL_MIN_MOVE = 3        # pixels; below this the pointer is parked, not moving
 PANEL_APP = os.path.join(os.path.dirname(HERE), "G9 PC Control", "App", "Main.ps1")
 
 
@@ -167,6 +172,54 @@ def open_panel_at_cursor():
          "-OpenPanel", "Cursor", "-AtCursor"],
         creationflags=0x08000000)          # CREATE_NO_WINDOW
     return True
+
+
+_trail_last = [0.0]
+
+
+def trail_step(trail, points, now):
+    """Sample the pointer and repaint the trail. Returns the overlay, or None.
+
+    The tail is bounded by TIME, not by a point count: at speed a fixed count
+    would stretch across the screen, and parked it would linger. Anything older
+    than TRAIL_SECONDS is dropped every frame.
+
+    Import is lazy and failure is swallowed on purpose - the trail is decoration,
+    and a missing overlay must never take the cursor swapping down with it.
+    """
+    try:
+        if trail is None:
+            import neon_trail
+            trail = neon_trail.NeonTrail()
+        else:
+            import neon_trail
+
+        x, y = neon_trail.cursor_pos()
+        if not points or abs(x - points[-1][0]) + abs(y - points[-1][1]) >= 1:
+            points.append((x, y, now))
+        while points and now - points[0][2] > TRAIL_SECONDS:
+            points.pop(0)
+
+        if now - _trail_last[0] < 1.0 / TRAIL_FPS:
+            return trail
+        _trail_last[0] = now
+
+        moved = (len(points) >= 2 and
+                 max(abs(points[-1][0] - points[0][0]),
+                     abs(points[-1][1] - points[0][1])) >= TRAIL_MIN_MOVE)
+        trail.update([(p[0], p[1]) for p in points] if moved else [])
+        return trail
+    except Exception:
+        return trail
+
+
+def trail_stop(trail, points):
+    points[:] = []
+    try:
+        if trail is not None:
+            trail.hide()
+    except Exception:
+        pass
 
 
 def set_all(path, ocr_ids):
@@ -362,6 +415,7 @@ def run():
     prev_lb = False              # previous button states, for detecting
     prev_rb = False              # a press rather than a held button
     spin_armed = False           # latched spin will accept a stop click
+    trail, points = None, []     # the light trail, built only while spinning
     both_since = None            # when both buttons went down, for arming
     taps, last_tap = 0, 0.0      # right-button taps counted while left is held
     consumed = False             # a gesture fired; do not also spin this hold
@@ -433,12 +487,14 @@ def run():
                 release()
                 mode, level, spin_armed = "rest", 0, False
                 both_since = None
+                trail_stop(trail, points)
             if mode == "spin":
                 want = min(SPIN_LEVELS,
                            1 + int((now - since) / SPIN_STEP_SECONDS))
                 if want != level:
                     level = want
                     set_all(spin_path_for(any_resting, level), masters.keys())
+                trail = trail_step(trail, points, now)
 
         elif lb and rb:
             if both_since is None:
@@ -460,6 +516,7 @@ def run():
             if mode != "rest":
                 release()
                 mode, level = "rest", 0
+                trail_stop(trail, points)
 
         prev_lb = lb
         time.sleep(0.008)

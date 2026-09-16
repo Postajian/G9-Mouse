@@ -19,3 +19,10 @@
   live pointer matches every file on disk
   push skipped (-NoPush)
 
+[2026-09-16 17:06:53] G9 Mouse update
+  artwork rebuilt: 70 files
+  every file parses, hotspot centred, Windows loads it
+  spin latches, survives release, stops on next click
+  live pointer matches every file on disk
+  pushed: NWPen centre emptied in both sets
+

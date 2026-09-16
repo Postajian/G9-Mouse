@@ -70,6 +70,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw ("test_latch.py failed:`n" + ($t | Out-String)) }
     Say '  spin latches, survives release, stops on next click' 'Green'
 
+    $tr = & $python 'test_trail.py' 2>&1
+    if ($LASTEXITCODE -ne 0) { throw ("test_trail.py failed:`n" + ($tr | Out-String)) }
+    Say '  neon trail paints real screen pixels at 30+ fps' 'Green'
+
     $p = & $python 'prove_installed.py' 2>&1
     if ($LASTEXITCODE -ne 0) {
         Say '  live pointer does NOT match disk - reinstall from the panel' 'Yellow'

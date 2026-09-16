@@ -55,8 +55,8 @@ class BITMAPINFOHEADER(ctypes.Structure):
                 ("biClrImportant", wintypes.DWORD)]
 
 
-WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_long, wintypes.HWND, wintypes.UINT,
-                             wintypes.WPARAM, wintypes.LPARAM)
+WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_longlong, wintypes.HWND, wintypes.UINT,
+                             ctypes.c_ulonglong, ctypes.c_longlong)
 
 
 class WNDCLASS(ctypes.Structure):
@@ -73,8 +73,11 @@ class NeonTrail(object):
     CLASS_NAME = "G9NeonTrail"
     _registered = False
 
-    def __init__(self, gap=7, core=3, glow=9,
-                 core_rgb=(210, 250, 255), glow_rgb=(0, 200, 255)):
+    def __init__(self, gap=7, core=3, glow=11,
+                 core_rgb=(238, 248, 255), glow_rgb=(130, 195, 255)):
+        # Tron: a near-white silver core inside an ice-blue bloom. A saturated
+        # cyan core looked like a highlighter; the light centre is what reads as
+        # a light trail rather than a drawn line.
         self.gap = gap              # half the distance between the two rails
         self.core = core            # bright inner line width
         self.glow = glow            # soft outer line width
@@ -88,6 +91,13 @@ class NeonTrail(object):
     def _register(self):
         if NeonTrail._registered:
             return
+        # argtypes must be declared. Without them ctypes guesses, and a 64-bit
+        # LPARAM overflows on the way back into DefWindowProcW - every single
+        # message to the window raised OverflowError. The window still appeared,
+        # so it looked fine while throwing continuously.
+        u32.DefWindowProcW.restype = ctypes.c_longlong
+        u32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT,
+                                       ctypes.c_ulonglong, ctypes.c_longlong]
         self._proc = WNDPROC(lambda h, m, w, l: u32.DefWindowProcW(h, m, w, l))
         wc = WNDCLASS()
         wc.lpfnWndProc = self._proc
