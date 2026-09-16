@@ -42,6 +42,16 @@ SPIF_UPDATEINI = 0x01
 SPIF_SENDCHANGE = 0x02
 
 
+# One name per set, in one place. A two-way "8 Star or else Reticle" meant
+# every set added later registered itself under the Reticle name, so Mouse
+# Properties showed one scheme silently overwriting another.
+SCHEME_NAMES = {"octagram": "8 Star", "reticle": "Reticle", "arrow": "Arrow"}
+
+
+def scheme_name(variant):
+    return SCHEME_NAMES.get(variant, variant.replace("_", " ").title())
+
+
 def read_current():
     """Every value under the Cursors key, plus the scheme name."""
     out = {}
@@ -155,7 +165,7 @@ def install(variant):
     print("restore point -> %s" % js)
     print("              -> %s" % reg)
 
-    name = "G9 %s" % ("8 Star" if variant == "octagram" else "Reticle")
+    name = "G9 %s" % scheme_name(variant)
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, KEY, 0, winreg.KEY_SET_VALUE) as k:
         for role in ROLES:
             # Blank, not skipped: a role left over from a previous install would

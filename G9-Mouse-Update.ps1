@@ -70,6 +70,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw ("test_latch.py failed:`n" + ($t | Out-String)) }
     Say '  spin latches, survives release, stops on next click' 'Green'
 
+    $ts = & $python 'test_sets.py' 2>&1
+    if ($LASTEXITCODE -ne 0) { throw ("test_sets.py failed:`n" + ($ts | Out-String)) }
+    Say '  every set is reachable, uniquely named, and the gesture cycles them' 'Green'
+
     $tr = & $python 'test_trail.py' 2>&1
     if ($LASTEXITCODE -ne 0) { throw ("test_trail.py failed:`n" + ($tr | Out-String)) }
     Say '  neon trail paints real screen pixels at 30+ fps' 'Green'

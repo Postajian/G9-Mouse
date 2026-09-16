@@ -33,6 +33,14 @@ CLOSES = [0, 5, 10, 17, 22, 27, 33, 40, 50]   # 17 and 27 are the chosen pair
 CLOSE_MIN, CLOSE_MAX = 0, 60
 
 
+SIZE_MIN, SIZE_MAX = 12, 256
+
+
+def clamp_size(v):
+    """Any typed pointer size, clamped to what Windows will actually render."""
+    return max(SIZE_MIN, min(SIZE_MAX, int(round(float(v)))))
+
+
 def clamp_close(v):
     """Accept any typed number, but never outside what the shape survives."""
     return max(CLOSE_MIN, min(CLOSE_MAX, int(round(float(v)))))
@@ -73,6 +81,13 @@ def load_settings():
             s.update(json.load(open(SETTINGS, encoding="utf-8")))
         except (OSError, ValueError):
             pass
+    # A saved name that no longer exists - a set renamed or dropped between
+    # versions - must not take the whole engine down with it. Renaming
+    # a set renamed twice left this file pointing at a deleted folder and
+    # every command after it failed.
+    if s.get("variant") not in B.VARIANTS:
+        s["variant"] = DEFAULTS["variant"]
+    s["size"] = clamp_size(s.get("size", DEFAULTS["size"]))
     return s
 
 
@@ -135,7 +150,12 @@ def cmd_status(_a):
     if shown == WINDOWS_MIN and int(s.get("size", 32)) < WINDOWS_MIN:
         shown = int(s["size"])
     return out(ok=True, variant=current_variant(), saved=s, size=shown,
+               # The panel builds its set buttons from THIS list. It used to
+               # hard-code two, so adding a third set drew it in the gallery
+               # with no button to pick it.
+               variants=[{"id": v, "label": label_for(v)} for v in B.VARIANTS],
                sizes=SIZES, closes=CLOSES,
+               sizeMin=SIZE_MIN, sizeMax=SIZE_MAX,
                restClose=clamp_close(s["restClose"]),
                pressClose=clamp_close(s["pressClose"]),
                closeMin=CLOSE_MIN, closeMax=CLOSE_MAX,
@@ -144,75 +164,71 @@ def cmd_status(_a):
                scheme=cfg.get("", "") or "(none)")
 
 
+GALLERY = os.path.join(HERE, "panel_gallery.png")
+
+# Display names. A variant with no entry falls back to its folder name, so a new
+# set still appears rather than being skipped.
+VARIANT_LABELS = {"reticle": "RETICLE", "octagram": "8 STAR",
+                  "arrow": "ARROW"}
+
+
+def label_for(variant):
+    """Display name, falling back to the folder name so a set added to
+    build_cursors.VARIANTS appears even before it is named here."""
+    return VARIANT_LABELS.get(variant, variant.upper())
+
+
 def render_preview(variant, a, b, size=32, rest=None, press=None):
+    """Resting vs clicked for ONE set, plus true size. The panel shows the
+    gallery instead; this stays for the CLI and for tests."""
     from PIL import Image, ImageDraw, ImageFont
+
     base, scale = size_plan(size)
     B.set_colours(a, b)
     B.set_scale(scale)
     B.set_spacing(None if rest is None else rest / 100.0,
                   None if press is None else press / 100.0)
-    tiles, real = [], []
-    for pressed in (False, True):
-        shapes, over = B.role_shapes(variant, "Arrow", pressed)
-        tiles.append(B.render(shapes, over, 128, False))
-        real.append(B.render(shapes, over, base, False))
-    B.set_scale(1.0)
+    try:
+        tiles = []
+        for pressed in (False, True):
+            shapes, over = B.role_shapes(variant, "Arrow", pressed)
+            tiles.append((B.render(shapes, over, 128, False),
+                          B.render(shapes, over, base, False)))
+    finally:
+        B.set_scale(1.0)
 
-    one = real[0]
-    # Height follows the true-size strip: at 128 px that strip is taller than the
-    # blown-up tiles, and a fixed height would have clipped it.
-    strip_y = 186
-    w = 150 * 2
-    h = strip_y + one.height + 36
-
+    one = tiles[0][1]
+    w, h = 300, 190 + one.height
     sheet = Image.new("RGB", (w, h), (24, 24, 24))
     d = ImageDraw.Draw(sheet)
     try:
-        f = ImageFont.truetype(TIMES, 15)
-        fs = ImageFont.truetype(TIMES, 12)
+        f = ImageFont.truetype(TIMES, 14)
+        fs = ImageFont.truetype(TIMES, 11)
     except OSError:
         f = fs = ImageFont.load_default()
 
-    for i, (img, label) in enumerate(zip(tiles, ("RESTING", "CLICKED"))):
-        x = i * 150
-        d.rectangle([x + 8, 8, x + 141, 141], outline=(90, 90, 90))
-        # paste needs the mask at the pasted size, not the original
-        small = img.resize((120, 120), Image.LANCZOS)
-        sheet.paste(small, (x + 15, 15), small)
-        d.text((x + 75, 146), label, font=f, anchor="ma", fill=(212, 175, 55))
+    for i, (big, _real) in enumerate(tiles):
+        x = 8 + i * 146
+        d.rectangle([x, 8, x + 136, 144], outline=(90, 90, 90))
+        sheet.paste(big.resize((124, 124), Image.LANCZOS), (x + 6, 14),
+                    big.resize((124, 124), Image.LANCZOS))
+        d.text((x + 68, 148), ("RESTING", "CLICKED")[i], font=f, anchor="ma",
+               fill=(212, 175, 55))
 
-    d.text((w // 2, 166), "click or hold the mouse to swap", font=fs, anchor="ma",
+    sw = one.width + 6
+    sx, sy = w // 2 - sw, 172
+    d.rectangle([sx, sy, sx + sw, sy + sw], fill=(242, 242, 242))
+    d.rectangle([sx + sw, sy, sx + 2 * sw, sy + sw], fill=(10, 10, 10))
+    sheet.paste(one, (sx + 3, sy + 3), one)
+    sheet.paste(one, (sx + sw + 3, sy + 3), one)
+    d.text((w // 2, sy + sw + 2), "actual size", font=fs, anchor="ma",
            fill=(150, 150, 150))
-
-    # True size, once, centred, on light and on dark. Without it the panel would
-    # only ever show a flattering blow-up, and a size that turns to mush at its
-    # real size would look fine right up until it was installed.
-    cell = one.width + 8
-    sx = w // 2 - cell
-    d.rectangle([sx, strip_y, sx + cell, strip_y + cell], fill=(242, 242, 242))
-    d.rectangle([sx + cell, strip_y, sx + 2 * cell, strip_y + cell], fill=(10, 10, 10))
-    d.rectangle([sx, strip_y, sx + 2 * cell, strip_y + cell], outline=(90, 90, 90))
-    sheet.paste(one, (sx + 4, strip_y + 4), one)
-    sheet.paste(one, (sx + cell + 4, strip_y + 4), one)
-    d.text((w // 2, strip_y + cell + 8), "actual size on screen", font=fs,
-           anchor="ma", fill=(150, 150, 150))
-
     sheet.save(PREVIEW)
     return PREVIEW
 
 
-GALLERY = os.path.join(HERE, "panel_gallery.png")
-
-
 def render_gallery(a, b, size=32, rest=None, press=None, variant="octagram"):
-    """Every role of both variants on one sheet, drawn from live geometry.
-
-    Deleted roles are drawn as an empty slot rather than skipped, so the sheet
-    shows what is GONE as well as what is there - a silently shorter grid would
-    hide the difference between a removed role and a rendering bug.
-    """
     from PIL import Image, ImageDraw, ImageFont
-
     base, scale = size_plan(size)
     B.set_colours(a, b)
     B.set_scale(scale)
@@ -220,72 +236,77 @@ def render_gallery(a, b, size=32, rest=None, press=None, variant="octagram"):
                   None if press is None else press / 100.0)
     try:
         roles = B.ROLES_STATIC + ["Wait", "AppStarting"]
-        cols, cell, head = 8, 120, 30
-        rows_per = (len(roles) + cols - 1) // cols
-        block = head + rows_per * cell
-        width = cols * cell
+        cols, cell, lab = 5, 62, 16          # 5 x 3 = the 15 roles, compactly
+        rows = (len(roles) + cols - 1) // cols
+        block_w = cols * cell
+        rule = 9                              # gap plus the divider rule
+        width = len(B.VARIANTS) * block_w + (len(B.VARIANTS) - 1) * rule
 
-        # Header: the live variant resting vs clicked, plus true size. It
-        # used to be a separate image in a separate control; folding it in
-        # here is what lets the panel drop the ALL VERSIONS button.
+        # Compact header: the live set resting vs clicked, plus true size.
         hero = []
         for pressed in (False, True):
             sh, ov = B.role_shapes(variant, "Arrow", pressed)
             hero.append((B.render(sh, ov, 128, False),
                          B.render(sh, ov, base, False)))
-        hdr = 150 + hero[0][1].height + 56   # clear of the true-size caption
+        one = hero[0][1]
+        hdr = 104 + one.height + 44   # clear of the true-size caption
 
-        sheet = Image.new("RGB", (width, hdr + block * 2 + 10), (20, 20, 20))
+        height = hdr + 18 + rows * (cell + lab) + 8
+        sheet = Image.new("RGB", (width, height), (20, 20, 20))
         d = ImageDraw.Draw(sheet)
         try:
-            f = ImageFont.truetype(TIMES, 15)
-            fs = ImageFont.truetype(TIMES, 11)
+            f = ImageFont.truetype(TIMES, 13)
+            fs = ImageFont.truetype(TIMES, 10)
         except OSError:
             f = fs = ImageFont.load_default()
 
-        for i, (big, real) in enumerate(hero):
-            x = width // 2 - 150 + i * 156
-            d.rectangle([x, 12, x + 144, 140], outline=(90, 90, 90))
-            small = big.resize((116, 116), Image.LANCZOS)
-            sheet.paste(small, (x + 14, 18), small)
-            d.text((x + 72, 144), ("RESTING", "CLICKED")[i], font=f,
+        for i, (big, _real) in enumerate(hero):
+            x = width // 2 - 104 + i * 108
+            d.rectangle([x, 8, x + 96, 104], outline=(90, 90, 90))
+            small = big.resize((84, 84), Image.LANCZOS)
+            sheet.paste(small, (x + 6, 14), small)
+            d.text((x + 48, 106), ("RESTING", "CLICKED")[i], font=fs,
                    anchor="ma", fill=(212, 175, 55))
-        one = hero[0][1]
-        sw = one.width + 8
-        sx, sy = width // 2 - sw, 168
+        sw = one.width + 6
+        sx, sy = width // 2 - sw, 122
         d.rectangle([sx, sy, sx + sw, sy + sw], fill=(242, 242, 242))
         d.rectangle([sx + sw, sy, sx + 2 * sw, sy + sw], fill=(10, 10, 10))
         d.rectangle([sx, sy, sx + 2 * sw, sy + sw], outline=(90, 90, 90))
-        sheet.paste(one, (sx + 4, sy + 4), one)
-        sheet.paste(one, (sx + sw + 4, sy + 4), one)
-        d.text((width // 2, sy + sw + 6), "actual size on screen",
-               font=fs, anchor="ma", fill=(150, 150, 150))
+        sheet.paste(one, (sx + 3, sy + 3), one)
+        sheet.paste(one, (sx + sw + 3, sy + 3), one)
+        d.text((width // 2, sy + sw + 2), "actual size", font=fs,
+               anchor="ma", fill=(150, 150, 150))
 
         live = 0
-        for vi, (variant, label) in enumerate(
-                (("reticle", "A .  RETICLE"), ("octagram", "B .  8 STAR"))):
-            gone = B.removed_roles(variant)
-            top = hdr + vi * block + 5
-            d.text((cols * cell // 2, top + 4),
-                   "%s   %d of %d" % (label, len(roles) - len(gone), len(roles)),
+        for vi, name in enumerate(B.VARIANTS):
+            gone = B.removed_roles(name)
+            bx = vi * (block_w + rule)
+            if vi:
+                # A rule between blocks, so three grids do not read as one.
+                d.line([(bx - rule // 2, hdr), (bx - rule // 2, height - 6)],
+                       fill=(62, 62, 62))
+            d.text((bx + block_w // 2, hdr),
+                   "%s  %d/%d" % (VARIANT_LABELS.get(name, name.upper()),
+                                  len(roles) - len(gone), len(roles)),
                    font=f, anchor="ma", fill=(212, 175, 55))
+
             for i, role in enumerate(roles):
-                x = (i % cols) * cell
-                y = top + head + (i // cols) * cell
-                d.rectangle([x + 4, y + 2, x + cell - 5, y + cell - 8],
-                            outline=(46, 46, 46) if role in gone else (84, 84, 84))
+                x = bx + (i % cols) * cell
+                y = hdr + 18 + (i // cols) * (cell + lab)
+                d.rectangle([x + 2, y + 1, x + cell - 3, y + cell - 2],
+                            outline=(46, 46, 46) if role in gone else (78, 78, 78))
                 if role in gone:
-                    d.text((x + cell // 2, y + cell // 2 - 18), "removed",
+                    d.text((x + cell // 2, y + cell // 2 - 7), "gone",
                            font=fs, anchor="ma", fill=(120, 88, 88))
                 else:
                     live += 1
-                    shapes, over = B.role_shapes(variant, role, False)
+                    shapes, over = B.role_shapes(name, role, False)
                     hg = "ink" if role == "Help" else False
                     img = B.render(shapes, over, 128, False, help_glyph=hg)
-                    img = img.resize((72, 72), Image.LANCZOS)
-                    sheet.paste(img, (x + cell // 2 - 36, y + 8), img)
-                d.text((x + cell // 2, y + cell - 24), role, font=fs, anchor="ma",
-                       fill=(215, 215, 215) if role not in gone else (110, 110, 110))
+                    img = img.resize((cell - 14, cell - 14), Image.LANCZOS)
+                    sheet.paste(img, (x + 7, y + 5), img)
+                d.text((x + cell // 2, y + cell - 1), role, font=fs, anchor="ma",
+                       fill=(210, 210, 210) if role not in gone else (105, 105, 105))
         sheet.save(GALLERY)
     finally:
         B.set_scale(1.0)
@@ -323,8 +344,8 @@ def cmd_apply(a):
     size = int(a.size or s["size"])
     rest = a.rest_close if a.rest_close is not None else s["restClose"]
     press = a.press_close if a.press_close is not None else s["pressClose"]
-    if v not in ("reticle", "octagram"):
-        return out(ok=False, error="apply needs reticle or octagram")
+    if v not in B.VARIANTS:
+        return out(ok=False, error="unknown variant: %s" % v)
 
     was_running = bool(effect_pid())
     if was_running:
@@ -431,10 +452,10 @@ def main():
         sub.add_parser(name)
     for name in ("preview", "apply", "gallery"):
         p = sub.add_parser(name)
-        p.add_argument("--variant", choices=["reticle", "octagram"])
+        p.add_argument("--variant", choices=B.VARIANTS)
         p.add_argument("--colour-a")
         p.add_argument("--colour-b")
-        p.add_argument("--size", type=int, choices=SIZES)
+        p.add_argument("--size", type=clamp_size)
         p.add_argument("--rest-close", type=clamp_close)
         p.add_argument("--press-close", type=clamp_close)
     pe = sub.add_parser("effect")

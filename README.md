@@ -7,7 +7,7 @@ No SVG rasteriser, no ImageMagick, no Inkscape. Shapes are plain polygons drawn
 at 4x supersample and Lanczos-downsampled, and the `.cur` / `.ani` containers are
 written byte by byte. The only dependency is Pillow.
 
-## The two cursor sets
+## The three cursor sets
 
 **8 Star** (Rub el Hizb) - two squares at 0 and 45 degrees, one stroke each.
 Thin outline while resting; bold interlaced bands that weave over and under at
@@ -16,7 +16,11 @@ all eight crossings while a button is held.
 **Reticle** - four corner brackets, two ginger and two cyan on opposite
 diagonals. Pressing reverses the diagonals and closes the frame inward.
 
-Both ship all 15 Windows cursor roles at 32/48/64/96/128 in a single `.cur`, so
+**Arrow** - eight arrows aimed inward from every side, alternating ginger and
+cyan so the ring repeats every 90 degrees. Pressing slides all eight toward the
+centre without changing their shape.
+
+All three ship all 15 Windows cursor roles at 32/48/64/96/128 in a single `.cur`, so
 the Windows cursor-size slider stays sharp. The frame is the family signature;
 only the centre mark changes per role.
 
@@ -27,6 +31,7 @@ With the helper running, the mouse itself drives the pointer:
 | Input | Result |
 |---|---|
 | Hold one button | The pressed artwork |
+| Hold left, tap right twice | Switches to the next set, wrapping |
 | Both buttons | Latches into a spin. Let go and it keeps turning; the next click stops it. Steps up a gear every 2 s through 5 gears |
 | Hold LEFT, tap RIGHT twice | Switch to the next cursor set |
 | Triple-tap numpad `+` | Open the control panel at the pointer |

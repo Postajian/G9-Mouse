@@ -26,3 +26,11 @@
   live pointer matches every file on disk
   pushed: NWPen centre emptied in both sets
 
+[2026-09-16 17:11:57] G9 Mouse update
+  artwork rebuilt: 70 files
+  every file parses, hotspot centred, Windows loads it
+  spin latches, survives release, stops on next click
+  neon trail paints real screen pixels at 30+ fps
+  live pointer matches every file on disk
+  pushed: Neon trail: silver-on-ice light trail while the spin is latched
+

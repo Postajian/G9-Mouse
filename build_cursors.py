@@ -227,6 +227,52 @@ def bracket_pairs(bars, swapped):
     return [(p, first if i in diag_a else second) for i, p in enumerate(bars)]
 
 
+# ---------------------------------------------------------------- arrow
+#
+# Eight arrows around a ring, every one aimed at the centre:
+#
+#        SE   S   SW
+#      E             W
+#        NE   N   NW
+#
+# Pressing pulls them inward, so the click reads as the ring closing on the
+# hotspot. Colours alternate round the ring, which makes the repeat 90 degrees.
+# An arrow is described by its TIP DISTANCE plus fixed head and tail lengths,
+# not by an inner and an outer radius. Scaling two radii independently made the
+# tail shrink whenever the ring closed in; this way the arrow keeps its exact
+# shape and simply slides toward the centre.
+ARROW_IN = 24.0         # how close the tips come to the centre, at rest
+ARROW_HEAD = 15.0       # length of the pointed head
+ARROW_HEAD_W = 6.5      # half-width of the head, was 10 before the -35% pass
+ARROW_TAIL = 24.0       # length of the shaft, doubled from 12
+ARROW_TAIL_W = 2.925    # half-width of the shaft, was 4.5
+ARROW_CLOSE = 0.30      # fraction pulled in while a button is held
+
+
+def _arrow_east(r_in):
+    """One arrow sitting east of centre, pointing west at it."""
+    head = r_in + ARROW_HEAD
+    return [
+        [(C + r_in, C),
+         (C + head, C - ARROW_HEAD_W),
+         (C + head, C + ARROW_HEAD_W)],                                    # head
+        rect(C + head - 1, C - ARROW_TAIL_W,
+             C + head - 1 + ARROW_TAIL, C + ARROW_TAIL_W),                 # shaft
+    ]
+
+
+def arrow_ring(fraction=0.0):
+    """The eight arrows, as [(polygon, colour), ...]."""
+    k = 1.0 - fraction
+    out = []
+    for i in range(8):
+        for poly in _arrow_east(ARROW_IN * k):
+            # Alternating colours make the ring repeat every 90 degrees, which
+            # is what lets the spinner loop on the same span as the 8 Star.
+            out.append((rotate(poly, i * 45.0), "ginger" if i % 2 == 0 else "cyan"))
+    return out
+
+
 def weave(bars_a, bars_b):
     """Crossing quads where square A must be redrawn on top of square B.
 
@@ -348,6 +394,12 @@ def role_shapes(variant, role, pressed, angle=0.0):
         shapes = bracket_pairs(bars, pressed)
         shapes += [(p, "ink") for p in centre_glyph(role)]
         return shapes, []
+
+    if variant == "arrow":
+        ring = arrow_ring(ARROW_CLOSE if pressed else 0.0)
+        if angle:
+            ring = [(rotate(p, angle), c) for p, c in ring]
+        return ring + [(p, "ink") for p in centre_glyph(role)], []
 
     # octagram: thin outline while resting, bold interlaced bands while pressed
     tight = role == "Hand"
@@ -541,6 +593,10 @@ def set_colours(a=None, b=None):
 # is 7.5 frames per second, which the eye reads as jumping, not turning.
 # Smoothness is frames per second; speed is degrees per frame. Separating them
 # lets gear 1 be slow AND smooth.
+# Every variant that exists. The builder, the CLI, the panel gallery and
+# the picker all read this rather than naming sets one by one.
+VARIANTS = ("reticle", "octagram", "arrow")
+
 SPIN_JIF = 2                            # 30 fps, every gear
 SPIN_FRAMES = [48, 36, 24, 12, 6]       # 3.75 / 5 / 7.5 / 15 / 30 deg per frame
 SPIN_SPAN = 180.0                       # degrees one loop covers
@@ -565,7 +621,7 @@ def build_spin(variant):
     # A span that is not a whole multiple of the shape's symmetry makes the
     # animation jump when it loops. Asserted rather than commented, because the
     # jump is subtle at speed and easy to ship without noticing.
-    symmetry = {"reticle": 180.0, "octagram": 90.0}.get(variant, 360.0)
+    symmetry = {"reticle": 180.0, "octagram": 90.0, "arrow": 90.0}.get(variant, 360.0)
     assert SPIN_SPAN % symmetry == 0, (
         "spin span %g does not loop cleanly for %s (symmetry %g)"
         % (SPIN_SPAN, variant, symmetry))
@@ -604,7 +660,7 @@ if __name__ == "__main__":
 
     ap = argparse.ArgumentParser(description="build G9 cursor sets")
     ap.add_argument("--variant", default="all",
-                    choices=["all", "reticle", "octagram"])
+                    choices=("all",) + VARIANTS)
     ap.add_argument("--colour-a", help="the cyan slot, #RRGGBB")
     ap.add_argument("--colour-b", help="the ginger slot, #RRGGBB")
     ap.add_argument("--rest-close", type=float,
@@ -618,7 +674,7 @@ if __name__ == "__main__":
     set_colours(args.colour_a, args.colour_b)
     set_scale(args.scale)
     set_spacing(args.rest_close, args.press_close)
-    wanted = ("reticle", "octagram") if args.variant == "all" else (args.variant,)
+    wanted = VARIANTS if args.variant == "all" else (args.variant,)
     for variant in wanted:
         for pressed, sub in ((False, "resting"), (True, "pressed")):
             files = build(variant, pressed, sub)
