@@ -52,6 +52,11 @@ try {
 } catch { }
 if ($effectWasOn) { & $python 'cursor_cli.py' 'effect' '--state' 'off' | Out-Null }
 
+# Which set is on the pointer before any test touches it. Reported, never
+# silently put back: a test that fails to restore and a user who switched sets
+# mid-run look identical from here, and only one of them should be overruled.
+$setBefore = (& $python 'which_set.py' 2>&1 | Select-Object -Last 1)
+
 try {
     # 1. rebuild
     & $python 'build_cursors.py' | Out-Null
@@ -83,6 +88,14 @@ try {
         Say '  live pointer does NOT match disk - reinstall from the panel' 'Yellow'
     } else {
         Say '  live pointer matches every file on disk' 'Green'
+    }
+
+    $setAfter = (& $python 'which_set.py' 2>&1 | Select-Object -Last 1)
+    if ($setAfter -ne $setBefore) {
+        Say ("  NOTE: pointer set changed during this run, {0} -> {1}" -f $setBefore, $setAfter) 'Yellow'
+        Say '        if you did not switch it yourself, a test failed to put it back' 'Yellow'
+    } else {
+        Say ("  pointer set unchanged by the run: {0}" -f $setAfter) 'Green'
     }
 
     # 4. publish
