@@ -262,14 +262,27 @@ def _size_all():
             [(92, 64), (76, 53), (76, 75)]]
 
 
-def centre_glyph(role):
-    """What sits on the hotspot. Always drawn in the 'ginger' colour slot.
+# Every centre mark is normalised to this span, so the set reads as one family
+# instead of each glyph being sized by eye. Measured spans before this existed
+# ranged from 46 (NWPen) to 60 (the size arrows) - a 30% spread.
+GLYPH_SPAN = 58.0
 
-    The centre stays EMPTY unless a role genuinely needs a mark there. A filled
-    square on the hotspot covered the very pixel being pointed at, so these
-    roles now show an open middle and are told apart by their frame instead:
-    Hand closes the frame in, Wait and AppStarting spin it.
-    """
+
+def normalise_glyph(polys):
+    """Scale a glyph about the centre so its longest side is GLYPH_SPAN."""
+    if not polys:
+        return polys
+    xs = [x for p in polys for x, _ in p]
+    ys = [y for p in polys for _, y in p]
+    span = max(max(xs) - min(xs), max(ys) - min(ys))
+    if span <= 0:
+        return polys
+    k = GLYPH_SPAN / span
+    return [[(C + (x - C) * k, C + (y - C) * k) for x, y in p] for p in polys]
+
+
+def _glyph_for(role):
+    """The raw mark for a role, before it is normalised to one size."""
     if role in ("Arrow", "Hand", "Help", "Wait", "AppStarting"):
         return []
     if role == "IBeam":
@@ -277,7 +290,10 @@ def centre_glyph(role):
     if role == "Crosshair":
         return [rect(60, 36, 68, 92), rect(36, 60, 92, 68)]
     if role == "No":
-        return [[(40, 48), (48, 40), (88, 80), (80, 88)]]
+        # A cross, not a single slash. One diagonal read as a stray mark rather
+        # than a symbol, and at cursor size it was easy to miss entirely.
+        return [[(40, 48), (48, 40), (88, 80), (80, 88)],
+                [(80, 40), (88, 48), (48, 88), (40, 80)]]
     if role == "UpArrow":
         return [rect(59, 62, 69, 92), [(64, 36), (46, 66), (82, 66)]]
     if role == "SizeNS":
@@ -294,6 +310,20 @@ def centre_glyph(role):
         return [[(42, 86), (49, 61), (67, 79)],
                 [(55, 55), (73, 73), (86, 58), (68, 40)]]
     raise ValueError("unknown role " + role)
+
+
+def centre_glyph(role):
+    """What sits on the hotspot, normalised so every mark is the same size.
+
+    The centre stays EMPTY unless a role genuinely needs a mark there. A filled
+    square on the hotspot covered the very pixel being pointed at, so those
+    roles show an open middle and are told apart by their frame instead: Hand
+    closes the frame in, Wait and AppStarting spin it.
+
+    Normalising at this one exit rather than sizing each mark by hand is what
+    keeps them a family - hand-placed coordinates had drifted to a 30% spread.
+    """
+    return normalise_glyph(_glyph_for(role))
 
 
 ROLES_STATIC = ["Arrow", "Hand", "IBeam", "Crosshair", "No", "Help", "UpArrow",
@@ -394,7 +424,10 @@ def render(shapes, over, size, swap, help_glyph=False):
             # Sized to match the arrow glyphs, which span about 60 of the 128 design
             # units. Times renders a "?" at roughly two thirds of its point size,
             # so 88 lands the glyph in the same visual weight class.
-            f = ImageFont.truetype(TIMES, max(6, int(88 * k * SCALE)))
+            # 84 pt, not a round number: measured, the Times "?" renders 55.2 units
+            # tall at 80 and 61.0 at 88, so 84 lands on the GLYPH_SPAN of 58 that
+            # every polygon mark is normalised to.
+            f = ImageFont.truetype(TIMES, max(6, int(84 * k * SCALE)))
             layer = Image.new("RGBA", (n, n), (0, 0, 0, 0))
             ImageDraw.Draw(layer).text(
                 (C * k, (C + 1) * k), "?", font=f, anchor="mm", fill=glyph_fill,
