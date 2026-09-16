@@ -66,6 +66,47 @@ def grab(x, y, w, h):
     return img
 
 
+class Backdrop(object):
+    """An opaque black sheet under the test region.
+
+    The measurements here are screen diffs, so ANYTHING that repaints inside
+    the rectangle lands in the result: a window moving through it made every
+    check report zero, and a repaint during one pair of grabs turned a red tail
+    into rgb(31,104,104). Laying down our own quiet surface first makes the
+    overlay the only thing that can change those pixels, without weakening the
+    check - the tail still has to paint on a real screen, over a real window."""
+
+    def __init__(self, x, y, w, h):
+        self.hwnd = None
+        self.rect = (x, y, w, h)
+
+    def __enter__(self):
+        NT.NeonTrail()._register()              # same window class, already safe
+        x, y, w, h = self.rect
+        u32.CreateWindowExW.restype = wintypes.HWND
+        self.hwnd = u32.CreateWindowExW(
+            NT.WS_EX_LAYERED | NT.WS_EX_TRANSPARENT | NT.WS_EX_TOOLWINDOW |
+            NT.WS_EX_NOACTIVATE | NT.WS_EX_TOPMOST,
+            NT.NeonTrail.CLASS_NAME, None, NT.WS_POPUP, x, y, w, h,
+            None, None, None, None)
+        u32.SetLayeredWindowAttributes(self.hwnd, 0, 255, 0x00000002)  # LWA_ALPHA
+        u32.ShowWindow(self.hwnd, 8)            # SW_SHOWNA
+        u32.SetWindowPos(self.hwnd, ctypes.c_void_p(-1), x, y, w, h, 0x0010)
+        hdc = u32.GetDC(self.hwnd)
+        brush = g32.CreateSolidBrush(0x00101010)
+        r = wintypes.RECT(0, 0, w, h)
+        u32.FillRect(hdc, ctypes.byref(r), brush)
+        g32.DeleteObject(brush)
+        u32.ReleaseDC(self.hwnd, hdc)
+        time.sleep(0.45)
+        return self
+
+    def __exit__(self, *_):
+        if self.hwnd:
+            u32.DestroyWindow(self.hwnd)
+        time.sleep(0.25)
+
+
 def arc(cx, cy, r, a0, a1, n):
     return [(int(cx + r * math.cos(math.radians(a))),
              int(cy + r * math.sin(math.radians(a))))
@@ -80,6 +121,8 @@ def main():
     x0, y0, w, h = cx - r - 60, cy - r - 60, 2 * (r + 60), 2 * (r + 60)
 
     trail = NT.NeonTrail()
+    backdrop = Backdrop(x0, y0, w, h)
+    backdrop.__enter__()
     try:
         before = grab(x0, y0, w, h)
 
@@ -165,6 +208,7 @@ def main():
     finally:
         trail.hide()
         trail.destroy()
+        backdrop.__exit__()
         time.sleep(0.2)
 
     # ------------------------------------------------------------ live reload
@@ -187,6 +231,10 @@ def main():
                        and after_cfg["contrast"] == 175))
     finally:
         open(CE.SETTINGS, "w", encoding="utf-8").write(saved)
+        # The preview PNG is an artifact too. Restoring only the settings left
+        # the panel's picture showing this test's throwaway numbers on disk.
+        import cursor_cli as CLI
+        CLI.render_trail_preview(CLI.load_settings()["trail"])
 
     bad = 0
     for label, ok in checks:
