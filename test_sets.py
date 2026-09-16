@@ -33,6 +33,12 @@ ROLE_COUNT = len(B.ROLES_STATIC) + len(B.ROLES_ANI)
 EXPECT_PER_SET = ROLE_COUNT * 2 + len(B.SPIN_FRAMES)     # resting + pressed + spin
 
 
+def installed_now():
+    cfg = {k: v["value"] for k, v in I.read_current().items()}
+    parts = cfg.get("Arrow", "").replace("/", "\\").split("\\")
+    return parts[parts.index("cursors") + 1] if "cursors" in parts else None
+
+
 def main():
     checks = []
     sets = list(B.VARIANTS)
@@ -73,6 +79,14 @@ def main():
     # 4. Walk the gesture for real: install, ask for next, install, repeat.
     #    One hop proves nothing - a cycle stuck between two sets looks correct
     #    until you press it a third time.
+    # Whatever the user had on before this test runs. Walking the cycle
+    # installs three sets, so without this the test quietly leaves the machine
+    # on sets[0] - which is exactly how the pointer kept reverting to RETICLE
+    # after every update run.
+    was = {k: v["value"] for k, v in I.read_current().items()}.get("Arrow", "")
+    parts = was.replace("/", "\\").split("\\")
+    was = parts[parts.index("cursors") + 1] if "cursors" in parts else None
+
     start = sets[0]
     seen = []
     with contextlib.redirect_stdout(io.StringIO()):     # install() is chatty
@@ -85,6 +99,12 @@ def main():
     checks.append(("gesture visits all %d sets: %s" % (len(sets), " -> ".join(seen)),
                    sorted(seen) == sorted(sets)))
     checks.append(("gesture wraps back to where it started", seen[-1] == start))
+
+    if was in sets:
+        with contextlib.redirect_stdout(io.StringIO()):
+            I.install(was)
+    checks.append(("puts the pointer back afterwards: %s" % (was or "(untouched)"),
+                   was not in sets or installed_now() == was))
 
     # 5. A settings file naming a set that no longer exists must heal, not kill.
     saved = None
