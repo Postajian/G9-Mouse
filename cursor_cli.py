@@ -177,14 +177,20 @@ def base_size():
 
 
 def set_base_size(px):
-    """Windows scales the pointer from CursorBaseSize, so changing the size is a
-    registry value plus a reload - not a re-render. Our .cur carries 32 to 128,
-    so every offered size is a real baked image rather than an upscale."""
+    """Set the pointer size, and make Windows actually use it.
+
+    CursorBaseSize is still written, because that is where Windows and the
+    Settings app read the pointer size from and the value should not lie. But
+    it is NOT what changes the pointer here: measured 2026-09-17 on build
+    26200, writing 32/64/96/128/160 and broadcasting SPI_SETCURSORS - with and
+    without SPIF_UPDATEINIFILE - left the live pointer at 32 every time, and
+    did so for stock Windows pointers as well as ours. force_size is what
+    moves it, and it has to run last because both broadcasts reset the roles
+    to 32 on the way through."""
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, I.KEY, 0, winreg.KEY_SET_VALUE) as k:
         winreg.SetValueEx(k, "CursorBaseSize", 0, winreg.REG_DWORD, int(px))
-    # SPIF_UPDATEINIFILE, not the plain reload: on this build the plain one leaves
-    # the live pointer its old size while the registry and preview already changed.
-    I.apply_cursor_size()
+    I.apply_now()
+    I.force_size(px)
 
 
 def current_variant():
@@ -431,7 +437,7 @@ def cmd_apply(a):
         B.set_scale(1.0)
 
     I.install(v)
-    set_base_size(base)
+    set_base_size(base)      # writes the value, then forces it onto every role
 
     s.update({"variant": v, "colourA": ca, "colourB": cb, "size": size,
               "restClose": rest, "pressClose": press})
@@ -534,17 +540,12 @@ PREVIEW_SPEED = 1200.0      # pixels per second
 
 
 def render_trail_preview(cfg):
-    """Draw the tail as it will really look, and show what each knob controls.
+    """Draw the tail the way it really paints: the actual streak as the hero,
+    over the G9 navy backdrop, with a clean labelled legend beneath it.
 
-    Two halves, because a streak alone cannot show a width. Left is a magnified
-    CROSS-SECTION - a slice straight through the tail - where core, glow and
-    spread are visible as sizes you can compare. Right is the tail itself at
-    true scale, with its length marked.
-
-    Deliberately rendered through neon_trail's own _bitmap rather than a
-    lookalike: a preview drawn by separate code shows what someone THINKS the
-    setting does. This is the code that paints your screen, composited over a
-    dark strip, so a wrong preview means a wrong tail.
+    Rendered through neon_trail's own _bitmap, never a lookalike, so the picture
+    is the code that paints your screen. Never raises - the preview is only
+    decoration, and a bad value must still yield an image, not a blank panel.
     """
     import math
 
@@ -552,135 +553,101 @@ def render_trail_preview(cfg):
 
     import neon_trail as NT
 
-    W, H = 660, 170
-    BG = (18, 18, 18)
-    INK = (150, 158, 168)
-    LIT = (236, 214, 120)
+    W, H = 680, 210
+    TOP, BOT = (8, 22, 38), (2, 8, 15)          # deep navy, top lighter than base
+    GOLD = (222, 186, 98)
+    WHITE = (236, 244, 250)
+    INK = (120, 140, 162)
     WARN = (255, 150, 90)
-    SPLIT = 250
-    BAR_X0, BAR_X1 = 22, 128           # the slice is this wide
-    TICK = BAR_X1 + 6                  # brackets hang off the right of it
 
-    trail = NT.from_settings(cfg)
-    sheet = Image.new("RGB", (W, H), BG)
+    # Vertical gradient backdrop, built as a 1px column and stretched to width.
+    col = Image.new("RGB", (1, H))
+    for y in range(H):
+        t = y / float(H - 1)
+        col.putpixel((0, y), tuple(int(TOP[i] + (BOT[i] - TOP[i]) * t) for i in range(3)))
+    sheet = col.resize((W, H))
     d = ImageDraw.Draw(sheet)
+
     try:
-        f = ImageFont.truetype(TIMES, 12)
-        fs = ImageFont.truetype(TIMES, 11)
+        f_title = ImageFont.truetype(TIMES, 13)
+        f_lab = ImageFont.truetype(TIMES, 12)
+        f_small = ImageFont.truetype(TIMES, 11)
     except OSError:
-        f = fs = ImageFont.load_default()
+        f_title = f_lab = f_small = ImageFont.load_default()
 
     core_rgb = NT.hex_rgb(cfg.get("coreColour"), (238, 248, 255))
     glow_rgb = NT.hex_rgb(cfg.get("glowColour"), (130, 195, 255))
-    gap, core, glow = cfg["gap"], cfg["core"], cfg["glow"]
-    rails_n = int(cfg.get("rails", 2))
-    contrast = cfg["contrast"] / 100.0
 
-    # ------------------------------------------------------- cross-section
-    d.text((BAR_X0, 6), "A SLICE THROUGH THE TAIL", font=fs, fill=INK)
-    reach = gap + max(core, glow) / 2.0
-    # Bounded so the slice can never grow into the captions below it, at any
-    # combination of the knobs. SPREAD 0 with a fat glow used to print its
-    # caption straight through the CONTRAST line.
-    # Shrinks as well as magnifies. Floored at 1.0 it could not fit the widest
-    # tail - SPREAD 40 with GLOW 48 drew straight through the title.
-    zoom = max(0.2, min(6.0, 30.0 / max(1.0, reach)))
-    mid = 62
-    if gap and rails_n > 1:
-        steps = [2.0 * j / (rails_n - 1) - 1.0 for j in range(rails_n)]
-        rails = [mid + s * gap * zoom for s in steps]
-    else:
-        rails = [mid]
+    d.text((22, 12), "YOUR TAIL AT A FAST SWIPE", font=f_title, fill=INK)
+    if cfg["glow"] <= cfg["core"]:
+        d.text((W - 22, 13), "glow inside core, hidden", font=f_small,
+               fill=WARN, anchor="ra")
 
-    def band(y, half, rgb, k):
-        c = tuple(min(255, int(v * k)) for v in rgb)
-        d.rectangle([BAR_X0, y - half, BAR_X1, y + half], fill=c)
-
-    for ry in rails:
-        band(ry, glow * zoom / 2.0, glow_rgb, min(1.0, 0.30 * contrast + 0.18))
-        band(ry, core * zoom / 2.0, core_rgb, min(1.0, 0.92 * contrast))
-
-    def bracket(ya, yb, text, colour=LIT):
-        d.line([(TICK, ya), (TICK, yb)], fill=INK)
-        d.line([(TICK, ya), (TICK - 4, ya)], fill=INK)
-        d.line([(TICK, yb), (TICK - 4, yb)], fill=INK)
-        d.text((TICK + 6, (ya + yb) / 2 - 8), text, font=f, fill=colour)
-
-    # One band per rail when there are two, so the labels never sit on top of
-    # each other; the bands are identical on both rails anyway.
-    captions = []
-    if len(rails) > 1:
-        # GLOW labelled on the top rail, CORE on the bottom, so the two width
-        # brackets never share a band; every rail is drawn identically.
-        bracket(rails[0] - glow * zoom / 2.0, rails[0] + glow * zoom / 2.0,
-                "GLOW %d px" % glow)
-        bracket(rails[-1] - core * zoom / 2.0, rails[-1] + core * zoom / 2.0,
-                "CORE %d px" % core)
-        d.line([(BAR_X0 - 8, rails[0]), (BAR_X0 - 8, rails[-1])], fill=INK)
-        if len(rails) == 2:
-            captions.append(("SPREAD %d px apart" % gap, LIT, f))
-        else:
-            captions.append(("%d lines, outer SPREAD %d px" % (len(rails), gap), LIT, f))
-    else:
-        bracket(mid - glow * zoom / 2.0, mid + glow * zoom / 2.0, "GLOW %d px" % glow)
-        captions.append(("CORE %d px inside it" % core, LIT, f))
-        if rails_n <= 1:
-            captions.append(("LINES 1  -  a single centred streak", LIT, f))
-        else:
-            captions.append(("SPREAD 0  -  one line, not two", LIT, f))
-
-    captions.append(("CONTRAST %d%%  -  how hard it burns" % cfg["contrast"], LIT, f))
-    if glow <= core:
-        # Worth saying out loud: the glow is doing nothing at these numbers.
-        captions.append(("glow is inside the core, so it cannot be seen", WARN, fs))
-
-    # Stacked from one cursor rather than placed at fixed offsets, so the count
-    # of lines can change without two of them landing on the same row.
-    cap_y = min(mid + reach * zoom + 12, H - 16 * len(captions) - 8)
-    for text, colour, font in captions:
-        d.text((BAR_X0, cap_y), text, font=font, fill=colour)
-        cap_y += 16
-    d.line([(SPLIT, 6), (SPLIT, H - 6)], fill=(70, 70, 70))
-
-    # ------------------------------------------------------- the real thing
-    d.text((SPLIT + 18, 6), "AT TRUE SIZE, BEHIND THE POINTER", font=fs, fill=INK)
-    head_x, head_y = W - 46, 70
-    streak = max(26.0, min(W - SPLIT - 96.0, cfg["ms"] / 1000.0 * PREVIEW_SPEED))
-    n = 26
+    # ---- hero: the real tail along a smooth swipe, drawn by the live engine ----
+    trail = NT.from_settings(cfg)
+    band_top, band_bot = 36, 150
+    head_x = W - 58
+    head_y = (band_top + band_bot) // 2
+    streak = max(70.0, min(W - 150.0, cfg.get("ms", 300) / 1000.0 * PREVIEW_SPEED))
+    n = 44
+    amp = (band_bot - band_top) * 0.30
     pts = [(head_x - streak * (1.0 - i / float(n - 1)),
-            head_y + 12.0 * math.sin((1.0 - i / float(n - 1)) * 2.2))
+            head_y + amp * math.sin((1.0 - i / float(n - 1)) * 2.4))
            for i in range(n)]
+    try:
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        pad = NT.MARGIN
+        x0, y0 = int(min(xs) - pad), int(min(ys) - pad)
+        bw, bh = int(max(xs) - min(xs)) + pad * 2, int(max(ys) - min(ys)) + pad * 2
+        layer = trail._bitmap(pts, x0, y0, bw, bh)
+        patch = sheet.crop((x0, y0, x0 + bw, y0 + bh)).convert("RGB")
+        inv = ImageChops.invert(layer.getchannel("A"))
+        # Premultiplied source over background: out = src + bg * (1 - alpha).
+        under = Image.merge("RGB", [ImageChops.multiply(c, inv) for c in patch.split()])
+        over = Image.merge("RGB", [ImageChops.add(a, b) for a, b in
+                                   zip(layer.convert("RGB").split(), under.split())])
+        sheet.paste(over, (x0, y0))
+        d = ImageDraw.Draw(sheet)
+    except Exception:
+        pass
 
-    xs = [p[0] for p in pts]
-    ys = [p[1] for p in pts]
-    pad = NT.MARGIN
-    x0, y0 = int(min(xs) - pad), int(min(ys) - pad)
-    bw, bh = int(max(xs) - min(xs)) + pad * 2, int(max(ys) - min(ys)) + pad * 2
-    layer = trail._bitmap(pts, x0, y0, bw, bh)
+    # crisp pointer head at the front of the streak
+    d.ellipse([head_x - 4, head_y - 4, head_x + 4, head_y + 4],
+              fill=(255, 255, 255), outline=(30, 40, 52))
 
-    patch = sheet.crop((x0, y0, x0 + bw, y0 + bh))
-    inv = ImageChops.invert(layer.getchannel("A"))
-    # Premultiplied source over background: out = src + bg * (1 - alpha).
-    under = Image.merge("RGB", [ImageChops.multiply(c, inv) for c in patch.split()])
-    over = Image.merge("RGB", [ImageChops.add(a, b) for a, b in
-                               zip(layer.convert("RGB").split(), under.split())])
-    sheet.paste(over, (x0, y0))
-
-    d = ImageDraw.Draw(sheet)
-    d.ellipse([head_x - 3, head_y - 3, head_x + 3, head_y + 3],
-              fill=(255, 255, 255), outline=(40, 40, 40))
-
-    ya, xa, xb = H - 40, head_x - streak, head_x
+    # length ruler under the hero
+    ya, xa, xb = band_bot + 8, head_x - streak, head_x
     d.line([(xa, ya), (xb, ya)], fill=INK)
-    for x, dx in ((xa, 4), (xb, -4)):
-        d.line([(x, ya), (x + dx, ya - 3)], fill=INK)
-        d.line([(x, ya), (x + dx, ya + 3)], fill=INK)
-        d.line([(x, ya - 5), (x, ya + 5)], fill=INK)
-    d.text(((xa + xb) / 2, ya + 5), "LENGTH %d ms" % cfg["ms"], font=f,
-           anchor="ma", fill=LIT)
-    d.text((W - 8, H - 20), "at a fast swipe", font=fs, anchor="ra", fill=INK)
+    for xx, dx in ((xa, 4), (xb, -4)):
+        d.line([(xx, ya), (xx + dx, ya - 3)], fill=INK)
+        d.line([(xx, ya), (xx + dx, ya + 3)], fill=INK)
+        d.line([(xx, ya - 4), (xx, ya + 4)], fill=INK)
 
-    d.rectangle([0, 0, W - 1, H - 1], outline=(70, 70, 70))
+    # ---- legend: gold LABEL then white value, evenly spaced on one line ----
+    chips = [
+        ("LENGTH", "%d ms" % cfg.get("ms", 300)),
+        ("LINES", "%d" % int(cfg.get("rails", 2))),
+        ("CORE", "%d px" % cfg["core"]),
+        ("GLOW", "%d px" % cfg["glow"]),
+        ("SPREAD", "%d px" % cfg["gap"]),
+        ("CONTRAST", "%d%%" % cfg["contrast"]),
+    ]
+    y = H - 26
+    x = 22
+    for lab, val in chips:
+        d.text((x, y), lab, font=f_lab, fill=GOLD)
+        x += d.textlength(lab, font=f_lab) + 5
+        d.text((x, y), val, font=f_lab, fill=WHITE)
+        x += d.textlength(val, font=f_lab) + 16
+
+    # the two tail hues as dots, right-aligned on the legend line
+    sx = W - 30
+    for rgb in (glow_rgb, core_rgb):
+        d.ellipse([sx, y + 1, sx + 12, y + 13], fill=rgb, outline=(45, 56, 70))
+        sx -= 18
+
+    d.rectangle([0, 0, W - 1, H - 1], outline=(44, 58, 76))
     sheet.save(TRAIL_PREVIEW)
     return TRAIL_PREVIEW
 

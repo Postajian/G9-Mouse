@@ -84,23 +84,57 @@ def apply_now():
                       "GetLastError=%d" % ctypes.get_last_error())
 
 
-def apply_cursor_size():
-    """Force Windows to re-render the pointer at the current CursorBaseSize.
+# The runtime ids for the roles Windows lets you replace. NWPen has none, so it
+# can never be resized or swapped at runtime. One copy, imported by the click
+# helper and the tests, because a second copy is where a role goes missing.
+OCR = {"Arrow": 32512, "IBeam": 32513, "Wait": 32514, "Crosshair": 32515,
+       "UpArrow": 32516, "SizeNWSE": 32642, "SizeNESW": 32643, "SizeWE": 32644,
+       "SizeNS": 32645, "SizeAll": 32646, "No": 32648, "Hand": 32649,
+       "AppStarting": 32650, "Help": 32651}
 
-    apply_now() (SPIF_SENDCHANGE alone) reloads the cursor IMAGES but does not
-    re-apply CursorBaseSize on this build: the registry value and the panel
-    preview change while the live pointer keeps its old size - exactly the
-    "only the picture changes, not my actual mouse" report. Adding
-    SPIF_UPDATEINIFILE is what makes the size take effect. That flag can make the
-    call return 0 while still applying, so unlike apply_now this is best-effort
-    and never raises on a zero return.
+IMAGE_CURSOR = 2
+LR_LOADFROMFILE = 0x0010
+
+
+def force_size(px, paths=None):
+    """Put every role on screen at EXACTLY px pixels.
+
+    CursorBaseSize does not work on this machine. Measured 2026-09-17 on build
+    26200: writing 32/64/96/128/160 and broadcasting SPI_SETCURSORS - with or
+    without SPIF_UPDATEINIFILE - left the pointer at 32 every time, and it did
+    so for plain Windows pointers as well as for our scheme, so it was never
+    about the artwork. LoadImageW with an explicit cx/cy and SetSystemCursor
+    sets the exact size asked for, including odd numbers (37, 100, 150) and
+    animated .ani files.
+
+    The cost of this route is that it is SESSION state, not settings: anything
+    that broadcasts SPI_SETCURSORS - including our own apply_now() - resets
+    every role to 32. So this must run AFTER install(), not before, and the
+    click helper has to re-assert it on every swap.
+
+    paths: {role: file}. Defaults to whatever is installed in the registry.
     """
     u32 = ctypes.WinDLL("user32", use_last_error=True)
-    u32.SystemParametersInfoW.restype = wintypes.BOOL
-    u32.SystemParametersInfoW.argtypes = [wintypes.UINT, wintypes.UINT,
-                                          ctypes.c_void_p, wintypes.UINT]
-    u32.SystemParametersInfoW(SPI_SETCURSORS, 0, None,
-                              SPIF_UPDATEINI | SPIF_SENDCHANGE)
+    u32.LoadImageW.restype = wintypes.HANDLE
+    u32.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR,
+                               wintypes.UINT, ctypes.c_int, ctypes.c_int,
+                               wintypes.UINT]
+    u32.SetSystemCursor.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+
+    if paths is None:
+        paths = {k: v["value"] for k, v in read_current().items()}
+    px = int(px)
+    done = 0
+    for role, ocr in OCR.items():
+        path = paths.get(role, "")
+        if not path or not os.path.isfile(path):
+            continue                       # role left stock; leave it alone
+        # A fresh handle per role: SetSystemCursor takes ownership and destroys
+        # what it is given, so one handle cannot be shared between two roles.
+        h = u32.LoadImageW(None, path, IMAGE_CURSOR, px, px, LR_LOADFROMFILE)
+        if h and u32.SetSystemCursor(h, ocr):
+            done += 1
+    return done
 
 
 def seed_original(current):

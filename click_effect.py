@@ -40,11 +40,9 @@ SPIF_SENDCHANGE = 0x02
 VK_LBUTTON, VK_RBUTTON = 0x01, 0x02
 
 # Only roles that have an OCR_* id can be swapped at runtime. NWPen has none,
-# so it keeps its resting artwork while a button is held.
-OCR = {"Arrow": 32512, "IBeam": 32513, "Wait": 32514, "Crosshair": 32515,
-       "UpArrow": 32516, "SizeNWSE": 32642, "SizeNESW": 32643, "SizeWE": 32644,
-       "SizeNS": 32645, "SizeAll": 32646, "No": 32648, "Hand": 32649,
-       "AppStarting": 32650, "Help": 32651}
+# so it keeps its resting artwork while a button is held. Defined once, in
+# install_cursors.
+OCR = I.OCR
 
 u32 = ctypes.WinDLL("user32", use_last_error=True)
 u32.LoadImageW.restype = ctypes.c_void_p
@@ -102,6 +100,30 @@ SETTINGS = os.path.join(HERE, "panel_settings.json")
 # the panel applies on every keystroke-commit, and the helper must follow along
 # without being restarted, but a JSON read every frame at 60 fps is waste.
 _trail_cfg = [0.0, None, None]
+
+
+_size_cfg = [0.0, 32]
+
+
+def pointer_size():
+    """The size the panel asked for, re-read when the settings file changes.
+
+    Every swap this helper makes goes through SetSystemCursor, which sets an
+    exact pixel size - so if the helper does not know the size, it silently
+    undoes it on the first click."""
+    try:
+        stamp = os.path.getmtime(SETTINGS)
+    except OSError:
+        return _size_cfg[1]
+    if stamp != _size_cfg[0]:
+        try:
+            import cursor_cli
+            raw = json.load(open(SETTINGS, encoding="utf-8")).get("size", 32)
+            _size_cfg[1] = cursor_cli.size_plan(cursor_cli.clamp_size(raw))[0]
+        except (OSError, ValueError, ImportError):
+            pass
+        _size_cfg[0] = stamp
+    return _size_cfg[1]
 
 
 def trail_settings():
@@ -263,10 +285,14 @@ def trail_stop(trail, points):
 
 
 def set_all(path, ocr_ids):
-    """Put one cursor file on every managed role at once."""
+    """Put one cursor file on every managed role at once, at the chosen size.
+
+    LR_DEFAULTSIZE with cx/cy of 0 gave a 32 px handle whatever the user had
+    asked for, so the first click after setting a big pointer snapped it back
+    to 32 and it stayed there."""
+    px = pointer_size()
     for ocr in ocr_ids:
-        h = u32.LoadImageW(None, path, IMAGE_CURSOR, 0, 0,
-                           LR_LOADFROMFILE | LR_DEFAULTSIZE)
+        h = u32.LoadImageW(None, path, IMAGE_CURSOR, px, px, LR_LOADFROMFILE)
         if h:
             u32.SetSystemCursor(ctypes.c_void_p(h), ocr)
 
@@ -283,7 +309,7 @@ def load_pressed_set():
         if not os.path.isfile(p):
             skipped.append(role)
             continue
-        h = u32.LoadImageW(None, p, IMAGE_CURSOR, 0, 0,
+        h = u32.LoadImageW(None, p, IMAGE_CURSOR, pointer_size(), pointer_size(),
                            LR_LOADFROMFILE | LR_DEFAULTSIZE)
         if not h:
             skipped.append(role)
@@ -303,14 +329,24 @@ def press(paths):
     interval for the handful of roles involved.
     """
     for ocr, path in paths.items():
-        h = u32.LoadImageW(None, path, IMAGE_CURSOR, 0, 0,
+        h = u32.LoadImageW(None, path, IMAGE_CURSOR, pointer_size(), pointer_size(),
                            LR_LOADFROMFILE | LR_DEFAULTSIZE)
         if h:
             u32.SetSystemCursor(ctypes.c_void_p(h), ocr)
 
 
 def release():
+    """Back to the resting artwork - and back to the chosen SIZE.
+
+    The broadcast restores every role from the registry, which is what makes
+    the resting set reappear. It also resets every role to 32 px, because the
+    size lives in session state rather than in the scheme. Without the second
+    line the first click of the day silently shrank a 96 px pointer to 32 and
+    nothing put it back until the next apply."""
     u32.SystemParametersInfoW(SPI_SETCURSORS, 0, None, SPIF_SENDCHANGE)
+    px = pointer_size()
+    if px != 32:
+        I.force_size(px)
 
 
 def selftest():
