@@ -89,3 +89,14 @@
   pointer set unchanged by the run: arrow
   pushed: G9 Mouse: update reports pointer drift; which_set.py replaces four inline copies
 
+[2026-09-17 21:28:52] G9 Mouse update
+  artwork rebuilt: 105 files
+  every file parses, hotspot centred, Windows loads it
+  spin latches, survives release, stops on next click
+  the typed size reaches the pointer and survives clicking
+  every set is reachable, uniquely named, and the gesture cycles them
+  neon trail paints real screen pixels at 30+ fps
+  live pointer matches every file on disk
+  pointer set unchanged by the run: arrow
+  pushed: G9 Mouse: typed SIZE now resizes the live pointer (LoadImageW+SetSystemCursor); CursorBaseSize is a no-op on this build
+

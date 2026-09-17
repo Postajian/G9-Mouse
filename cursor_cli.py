@@ -540,12 +540,18 @@ PREVIEW_SPEED = 1200.0      # pixels per second
 
 
 def render_trail_preview(cfg):
-    """Draw the tail the way it really paints: the actual streak as the hero,
-    over the G9 navy backdrop, with a clean labelled legend beneath it.
+    """Show what every tail knob does, on one strip, over the G9 navy.
 
-    Rendered through neon_trail's own _bitmap, never a lookalike, so the picture
-    is the code that paints your screen. Never raises - the preview is only
-    decoration, and a bad value must still yield an image, not a blank panel.
+    LEFT is a magnified CROSS-SECTION - one slice straight across the tail -
+    where CORE, GLOW, LINES and SPREAD are all visible as sizes you can compare.
+    It is built from neon_trail's own rail maths, so it matches the real tail
+    rail-for-rail rather than being a lookalike. RIGHT is the tail at true size
+    behind the pointer, drawn by the live engine, with its LENGTH marked.
+
+    No number legend: the boxes below already hold the numbers. The point of a
+    preview is to show the thing the numbers cannot.
+
+    Never raises - a bad value must still yield an image, not a blank panel.
     """
     import math
 
@@ -553,14 +559,14 @@ def render_trail_preview(cfg):
 
     import neon_trail as NT
 
-    W, H = 680, 210
-    TOP, BOT = (8, 22, 38), (2, 8, 15)          # deep navy, top lighter than base
+    W, H = 940, 176
+    TOP, BOT = (8, 22, 38), (2, 8, 15)
     GOLD = (222, 186, 98)
     WHITE = (236, 244, 250)
     INK = (120, 140, 162)
     WARN = (255, 150, 90)
+    SPLIT = 322
 
-    # Vertical gradient backdrop, built as a 1px column and stretched to width.
     col = Image.new("RGB", (1, H))
     for y in range(H):
         t = y / float(H - 1)
@@ -569,28 +575,79 @@ def render_trail_preview(cfg):
     d = ImageDraw.Draw(sheet)
 
     try:
-        f_title = ImageFont.truetype(TIMES, 13)
         f_lab = ImageFont.truetype(TIMES, 12)
         f_small = ImageFont.truetype(TIMES, 11)
     except OSError:
-        f_title = f_lab = f_small = ImageFont.load_default()
+        f_lab = f_small = ImageFont.load_default()
 
     core_rgb = NT.hex_rgb(cfg.get("coreColour"), (238, 248, 255))
     glow_rgb = NT.hex_rgb(cfg.get("glowColour"), (130, 195, 255))
+    core, glow, gap = cfg["core"], cfg["glow"], cfg["gap"]
+    contrast = cfg["contrast"] / 100.0
 
-    d.text((22, 12), "YOUR TAIL AT A FAST SWIPE", font=f_title, fill=INK)
-    if cfg["glow"] <= cfg["core"]:
-        d.text((W - 22, 13), "glow inside core, hidden", font=f_small,
-               fill=WARN, anchor="ra")
-
-    # ---- hero: the real tail along a smooth swipe, drawn by the live engine ----
     trail = NT.from_settings(cfg)
-    band_top, band_bot = 36, 150
-    head_x = W - 58
+    offsets = trail._rail_offsets()             # the real rail positions, -1..+1
+
+    # ================================================= LEFT: the cross-section
+    d.text((16, 8), "ONE SLICE ACROSS THE TAIL", font=f_small, fill=INK)
+    slice_x0, slice_x1 = 58, 178
+    mid = 92
+    # Fit the tallest possible stack - outer rail at +/-SPREAD plus half a glow
+    # - into the band, shrinking as well as magnifying so big values still fit.
+    reach = gap + max(core, glow) / 2.0 + 2
+    zoom = max(0.5, min(6.0, 62.0 / max(1.0, reach)))
+
+    def band(yc, half, rgb, dim):
+        c = tuple(min(255, int(v * dim)) for v in rgb)
+        d.rectangle([slice_x0, yc - half, slice_x1, yc + half], fill=c)
+
+    rail_ys = [mid + s * gap * zoom for s in offsets]
+    for yc in rail_ys:
+        band(yc, max(1.0, glow * zoom / 2.0), glow_rgb, min(1.0, 0.34 * contrast + 0.18))
+        band(yc, max(0.6, core * zoom / 2.0), core_rgb, min(1.0, 0.95 * contrast))
+
+    def bracket(x, ya, yb, text, colour=GOLD, side="r"):
+        d.line([(x, ya), (x, yb)], fill=INK)
+        d.line([(x, ya), (x - 4 if side == "r" else x + 4, ya)], fill=INK)
+        d.line([(x, yb), (x - 4 if side == "r" else x + 4, yb)], fill=INK)
+        tx = x + 6 if side == "r" else x - 6
+        d.text((tx, (ya + yb) / 2 - 8), text, font=f_lab, fill=colour,
+               anchor="lm" if side == "r" else "rm")
+
+    top_y = rail_ys[0]
+    # GLOW on the right of the top rail, CORE on the left of it - so the two
+    # labels never sit on top of each other however thin the bands are.
+    bracket(slice_x1 + 4, top_y - glow * zoom / 2.0, top_y + glow * zoom / 2.0,
+            "GLOW", side="r")
+    bracket(slice_x0 - 4, top_y - core * zoom / 2.0, top_y + core * zoom / 2.0,
+            "CORE", side="l")
+    if glow <= core:
+        d.text((16, H - 16), "glow <= core, so the halo is hidden", font=f_small,
+               fill=WARN)
+
+    # SPREAD between the two outermost rails, and the line count.
+    if len(rail_ys) >= 2:
+        xs = (slice_x0 + slice_x1) // 2
+        ya2, yb2 = rail_ys[0], rail_ys[-1]
+        d.line([(xs, ya2), (xs, yb2)], fill=WHITE)
+        for yy, dy in ((ya2, 4), (yb2, -4)):
+            d.line([(xs, yy), (xs - 3, yy + dy)], fill=WHITE)
+            d.line([(xs, yy), (xs + 3, yy + dy)], fill=WHITE)
+        d.text((xs + 6, (ya2 + yb2) / 2 - 8), "SPREAD", font=f_lab, fill=WHITE)
+        d.text((16, H - 30), "LINES  x%d" % len(rail_ys), font=f_lab, fill=GOLD)
+    else:
+        d.text((16, H - 30), "LINES  x1  (one centred streak)", font=f_lab, fill=GOLD)
+
+    d.line([(SPLIT, 8), (SPLIT, H - 8)], fill=(44, 58, 76))
+
+    # ============================================= RIGHT: the tail at true size
+    d.text((SPLIT + 18, 8), "AT TRUE SIZE, BEHIND THE POINTER", font=f_small, fill=INK)
+    band_top, band_bot = 34, 132
+    head_x = W - 46
     head_y = (band_top + band_bot) // 2
-    streak = max(70.0, min(W - 150.0, cfg.get("ms", 300) / 1000.0 * PREVIEW_SPEED))
+    streak = max(70.0, min(W - SPLIT - 96.0, cfg.get("ms", 300) / 1000.0 * PREVIEW_SPEED))
     n = 44
-    amp = (band_bot - band_top) * 0.30
+    amp = (band_bot - band_top) * 0.28
     pts = [(head_x - streak * (1.0 - i / float(n - 1)),
             head_y + amp * math.sin((1.0 - i / float(n - 1)) * 2.4))
            for i in range(n)]
@@ -603,7 +660,6 @@ def render_trail_preview(cfg):
         layer = trail._bitmap(pts, x0, y0, bw, bh)
         patch = sheet.crop((x0, y0, x0 + bw, y0 + bh)).convert("RGB")
         inv = ImageChops.invert(layer.getchannel("A"))
-        # Premultiplied source over background: out = src + bg * (1 - alpha).
         under = Image.merge("RGB", [ImageChops.multiply(c, inv) for c in patch.split()])
         over = Image.merge("RGB", [ImageChops.add(a, b) for a, b in
                                    zip(layer.convert("RGB").split(), under.split())])
@@ -612,40 +668,20 @@ def render_trail_preview(cfg):
     except Exception:
         pass
 
-    # crisp pointer head at the front of the streak
     d.ellipse([head_x - 4, head_y - 4, head_x + 4, head_y + 4],
               fill=(255, 255, 255), outline=(30, 40, 52))
 
-    # length ruler under the hero
-    ya, xa, xb = band_bot + 8, head_x - streak, head_x
+    ya, xa, xb = band_bot + 12, head_x - streak, head_x
     d.line([(xa, ya), (xb, ya)], fill=INK)
     for xx, dx in ((xa, 4), (xb, -4)):
         d.line([(xx, ya), (xx + dx, ya - 3)], fill=INK)
         d.line([(xx, ya), (xx + dx, ya + 3)], fill=INK)
         d.line([(xx, ya - 4), (xx, ya + 4)], fill=INK)
-
-    # ---- legend: gold LABEL then white value, evenly spaced on one line ----
-    chips = [
-        ("LENGTH", "%d ms" % cfg.get("ms", 300)),
-        ("LINES", "%d" % int(cfg.get("rails", 2))),
-        ("CORE", "%d px" % cfg["core"]),
-        ("GLOW", "%d px" % cfg["glow"]),
-        ("SPREAD", "%d px" % cfg["gap"]),
-        ("CONTRAST", "%d%%" % cfg["contrast"]),
-    ]
-    y = H - 26
-    x = 22
-    for lab, val in chips:
-        d.text((x, y), lab, font=f_lab, fill=GOLD)
-        x += d.textlength(lab, font=f_lab) + 5
-        d.text((x, y), val, font=f_lab, fill=WHITE)
-        x += d.textlength(val, font=f_lab) + 16
-
-    # the two tail hues as dots, right-aligned on the legend line
-    sx = W - 30
-    for rgb in (glow_rgb, core_rgb):
-        d.ellipse([sx, y + 1, sx + 12, y + 13], fill=rgb, outline=(45, 56, 70))
-        sx -= 18
+    d.text(((xa + xb) / 2, ya + 5), "LENGTH  %d ms" % cfg.get("ms", 300),
+           font=f_lab, anchor="ma", fill=GOLD)
+    d.text((SPLIT + 18, H - 18), "CONTRAST %d%% - how hard it burns" % cfg["contrast"],
+           font=f_small, fill=INK)
+    d.text((W - 14, H - 18), "at a fast swipe", font=f_small, anchor="ra", fill=INK)
 
     d.rectangle([0, 0, W - 1, H - 1], outline=(44, 58, 76))
     sheet.save(TRAIL_PREVIEW)
