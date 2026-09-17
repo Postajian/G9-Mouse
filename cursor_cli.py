@@ -49,8 +49,11 @@ TRAIL_SPEC = [
      "Width of the bright inner line."),
     ("glow",      "GLOW",       1,    48, "px",
      "Width of the soft outer bloom. Below the core width the glow disappears."),
+    ("rails",     "LINES",      1,     5, "",
+     "How many parallel lines the tail draws. 1 is a single centred streak, "
+     "2 is the pair, 3 adds a centre line. SPREAD places the outer lines."),
     ("gap",       "SPREAD",     0,    40, "px",
-     "Half the distance between the two rails. 0 draws them as one line."),
+     "How far the outer lines sit from the centre. 0 draws them all as one line."),
     ("contrast",  "CONTRAST",  10,   200, "%",
      "How strongly the tail burns against the screen. 100 is the default mix."),
 ]
@@ -58,7 +61,8 @@ TRAIL_COLOURS = [
     ("coreColour", "CORE HUE", "The bright centre of the tail."),
     ("glowColour", "GLOW HUE", "The soft bloom around it."),
 ]
-TRAIL_DEFAULTS = {"ms": 300, "core": 3, "glow": 11, "gap": 7, "contrast": 100,
+TRAIL_DEFAULTS = {"ms": 300, "core": 3, "glow": 11, "rails": 2, "gap": 7,
+                  "contrast": 100,
                   "coreColour": "#eef8ff", "glowColour": "#82c3ff"}
 
 
@@ -178,7 +182,9 @@ def set_base_size(px):
     so every offered size is a real baked image rather than an upscale."""
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, I.KEY, 0, winreg.KEY_SET_VALUE) as k:
         winreg.SetValueEx(k, "CursorBaseSize", 0, winreg.REG_DWORD, int(px))
-    I.apply_now()
+    # SPIF_UPDATEINIFILE, not the plain reload: on this build the plain one leaves
+    # the live pointer its old size while the registry and preview already changed.
+    I.apply_cursor_size()
 
 
 def current_variant():
@@ -469,6 +475,19 @@ def start_effect():
         exe = sys.executable
     subprocess.Popen([exe, os.path.join(HERE, "click_effect.py")],
                      cwd=HERE, creationflags=0x08000000)   # CREATE_NO_WINDOW
+    # Wait until the helper confirms it is up before returning. It writes its pid
+    # file only after Python has started and imported - about 1-2 s - so any
+    # caller that re-checks effect_pid() straight after start_effect() would read
+    # None and report the effect OFF while the helper it just launched is coming
+    # up. cmd_apply did exactly that, so EVERY size, colour, or set change flashed
+    # "CLICK EFFECT: OFF" even though it was still on, and clicking that mislabel
+    # turned it off for real. Block here so start_effect() is true when it returns.
+    import time
+    deadline = time.time() + 6.0
+    while time.time() < deadline:
+        if effect_pid():
+            return
+        time.sleep(0.1)
 
 
 def stop_effect():
@@ -554,6 +573,7 @@ def render_trail_preview(cfg):
     core_rgb = NT.hex_rgb(cfg.get("coreColour"), (238, 248, 255))
     glow_rgb = NT.hex_rgb(cfg.get("glowColour"), (130, 195, 255))
     gap, core, glow = cfg["gap"], cfg["core"], cfg["glow"]
+    rails_n = int(cfg.get("rails", 2))
     contrast = cfg["contrast"] / 100.0
 
     # ------------------------------------------------------- cross-section
@@ -566,7 +586,11 @@ def render_trail_preview(cfg):
     # tail - SPREAD 40 with GLOW 48 drew straight through the title.
     zoom = max(0.2, min(6.0, 30.0 / max(1.0, reach)))
     mid = 62
-    rails = [mid - gap * zoom, mid + gap * zoom] if gap else [mid]
+    if gap and rails_n > 1:
+        steps = [2.0 * j / (rails_n - 1) - 1.0 for j in range(rails_n)]
+        rails = [mid + s * gap * zoom for s in steps]
+    else:
+        rails = [mid]
 
     def band(y, half, rgb, k):
         c = tuple(min(255, int(v * k)) for v in rgb)
@@ -585,17 +609,25 @@ def render_trail_preview(cfg):
     # One band per rail when there are two, so the labels never sit on top of
     # each other; the bands are identical on both rails anyway.
     captions = []
-    if len(rails) == 2:
+    if len(rails) > 1:
+        # GLOW labelled on the top rail, CORE on the bottom, so the two width
+        # brackets never share a band; every rail is drawn identically.
         bracket(rails[0] - glow * zoom / 2.0, rails[0] + glow * zoom / 2.0,
                 "GLOW %d px" % glow)
-        bracket(rails[1] - core * zoom / 2.0, rails[1] + core * zoom / 2.0,
+        bracket(rails[-1] - core * zoom / 2.0, rails[-1] + core * zoom / 2.0,
                 "CORE %d px" % core)
-        d.line([(BAR_X0 - 8, rails[0]), (BAR_X0 - 8, rails[1])], fill=INK)
-        captions.append(("SPREAD %d px apart" % gap, LIT, f))
+        d.line([(BAR_X0 - 8, rails[0]), (BAR_X0 - 8, rails[-1])], fill=INK)
+        if len(rails) == 2:
+            captions.append(("SPREAD %d px apart" % gap, LIT, f))
+        else:
+            captions.append(("%d lines, outer SPREAD %d px" % (len(rails), gap), LIT, f))
     else:
         bracket(mid - glow * zoom / 2.0, mid + glow * zoom / 2.0, "GLOW %d px" % glow)
         captions.append(("CORE %d px inside it" % core, LIT, f))
-        captions.append(("SPREAD 0  -  one line, not two", LIT, f))
+        if rails_n <= 1:
+            captions.append(("LINES 1  -  a single centred streak", LIT, f))
+        else:
+            captions.append(("SPREAD 0  -  one line, not two", LIT, f))
 
     captions.append(("CONTRAST %d%%  -  how hard it burns" % cfg["contrast"], LIT, f))
     if glow <= core:

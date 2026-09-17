@@ -46,12 +46,17 @@ def run_timeline(steps, tick=0.02):
             return -32768 if state["rb"] else 0
         return 0
 
+    def fake_create_mutex(*_args):
+        ctypes.set_last_error(0)
+        return 123456
+
     real = {
         "key": CE.u32.GetAsyncKeyState,
         "press": CE.press,
         "release": CE.release,
         "set_all": CE.set_all,
         "pidfile": CE.PIDFILE,
+        "mutex": CE.k32.CreateMutexW,
     }
     t0 = time.time()
     CE.u32.GetAsyncKeyState = fake_key
@@ -60,6 +65,7 @@ def run_timeline(steps, tick=0.02):
     CE.set_all = lambda path, _ids: actions.append(
         (time.time() - t0, "spin%s" % path[-5:-4]))   # spinN.ani -> N
     CE.PIDFILE = CE.PIDFILE + ".test"
+    CE.k32.CreateMutexW = fake_create_mutex
 
     t = threading.Thread(target=player)
     t.start()
@@ -72,6 +78,7 @@ def run_timeline(steps, tick=0.02):
         CE.u32.GetAsyncKeyState = real["key"]
         CE.press, CE.release, CE.set_all = real["press"], real["release"], real["set_all"]
         CE.PIDFILE = real["pidfile"]
+        CE.k32.CreateMutexW = real["mutex"]
     return actions
 
 

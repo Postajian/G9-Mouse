@@ -94,7 +94,8 @@ def from_settings(t):
                      glow=int(t.get("glow", 11)),
                      core_rgb=hex_rgb(t.get("coreColour"), (238, 248, 255)),
                      glow_rgb=hex_rgb(t.get("glowColour"), (130, 195, 255)),
-                     contrast=int(t.get("contrast", 100)))
+                     contrast=int(t.get("contrast", 100)),
+                     rails=int(t.get("rails", 2)))
 
 
 class NeonTrail(object):
@@ -105,16 +106,17 @@ class NeonTrail(object):
 
     def __init__(self, gap=7, core=3, glow=11,
                  core_rgb=(238, 248, 255), glow_rgb=(130, 195, 255),
-                 contrast=100):
+                 contrast=100, rails=2):
         # Tron: a near-white silver core inside an ice-blue bloom. A saturated
         # cyan core looked like a highlighter; the light centre is what reads as
         # a light trail rather than a drawn line.
-        self.gap = gap              # half the distance between the two rails
+        self.gap = gap              # SPREAD: where the OUTERMOST rails sit
         self.core = core            # bright inner line width
         self.glow = glow            # soft outer line width
         self.core_rgb = core_rgb
         self.glow_rgb = glow_rgb
         self.contrast = contrast    # percent; 100 is the mix the tail shipped with
+        self.rails = max(1, min(9, int(rails)))   # how many parallel lines
         self.hwnd = None
 
     # ---------------------------------------------------------------- window
@@ -173,11 +175,27 @@ class NeonTrail(object):
 
     # ----------------------------------------------------------------- paint
 
+    def _rail_offsets(self):
+        """Symmetric rail positions in units of SPREAD, from -1 to +1.
+
+        1 -> (0,), 2 -> (-1, 1), 3 -> (-1, 0, 1). The outermost rails always land
+        at +/- SPREAD, so raising the count fills inward without widening what is
+        already there, and the 2-rail case is byte-for-byte the pair the tail
+        shipped with."""
+        r = self.rails
+        if r <= 1:
+            return (0.0,)
+        return tuple(2.0 * j / (r - 1) - 1.0 for j in range(r))
+
     def _bitmap(self, points, x0, y0, w, h):
-        """Two parallel rails along the path, fading toward the tail."""
+        """self.rails parallel rails along the path, fading toward the tail.
+
+        1 is a single centred streak, 2 the original pair at +/- SPREAD, 3 adds
+        a centre line between them. SPREAD 0 collapses every rail onto one line."""
         img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         d = ImageDraw.Draw(img, "RGBA")
 
+        offsets = self._rail_offsets()
         n = len(points)
         for i in range(n - 1):
             ax, ay = points[i][0] - x0, points[i][1] - y0
@@ -186,13 +204,14 @@ class NeonTrail(object):
             length = (dx * dx + dy * dy) ** 0.5
             if length < 0.5:
                 continue
-            # Perpendicular to travel, so the rails stay beside the path
+            # Unit perpendicular to travel, so the rails stay beside the path
             # whichever way the pointer turns.
-            px, py = -dy / length * self.gap, dx / length * self.gap
+            ux, uy = -dy / length, dx / length
 
             fade = (i + 1) / float(n)            # newest segment brightest
-            for ox, oy in ((px, py), (-px, -py)):
-                k = self.contrast / 100.0
+            k = self.contrast / 100.0
+            for s in offsets:
+                ox, oy = ux * self.gap * s, uy * self.gap * s
                 d.line([(ax + ox, ay + oy), (bx + ox, by + oy)],
                        fill=self.glow_rgb + (_a8(70 * fade * k),),
                        width=self.glow, joint="curve")

@@ -84,6 +84,25 @@ def apply_now():
                       "GetLastError=%d" % ctypes.get_last_error())
 
 
+def apply_cursor_size():
+    """Force Windows to re-render the pointer at the current CursorBaseSize.
+
+    apply_now() (SPIF_SENDCHANGE alone) reloads the cursor IMAGES but does not
+    re-apply CursorBaseSize on this build: the registry value and the panel
+    preview change while the live pointer keeps its old size - exactly the
+    "only the picture changes, not my actual mouse" report. Adding
+    SPIF_UPDATEINIFILE is what makes the size take effect. That flag can make the
+    call return 0 while still applying, so unlike apply_now this is best-effort
+    and never raises on a zero return.
+    """
+    u32 = ctypes.WinDLL("user32", use_last_error=True)
+    u32.SystemParametersInfoW.restype = wintypes.BOOL
+    u32.SystemParametersInfoW.argtypes = [wintypes.UINT, wintypes.UINT,
+                                          ctypes.c_void_p, wintypes.UINT]
+    u32.SystemParametersInfoW(SPI_SETCURSORS, 0, None,
+                              SPIF_UPDATEINI | SPIF_SENDCHANGE)
+
+
 def seed_original(current):
     """Pin the pointers as they were BEFORE this tool ever touched them.
 

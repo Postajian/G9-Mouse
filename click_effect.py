@@ -62,6 +62,14 @@ u32.GetAsyncKeyState.restype = ctypes.c_short
 u32.GetAsyncKeyState.argtypes = [ctypes.c_int]
 u32.DestroyCursor.argtypes = [ctypes.c_void_p]
 
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+k32.CreateMutexW.restype = wintypes.HANDLE
+k32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+
+# Held for the whole process lifetime so it is never garbage-collected and the
+# OS releases it only when this process dies. See the single-instance guard in run().
+_INSTANCE_MUTEX = None
+
 
 SPIN_STEP_SECONDS = 2.0
 
@@ -408,6 +416,16 @@ def selftest():
 
 
 def run():
+    # Single instance. The keep-alive in the Close X watcher may try to start a
+    # second helper the instant the first is coming up or going down; a named
+    # mutex makes that harmless - the loser returns before touching a cursor, so
+    # two helpers never fight over SetSystemCursor or clobber each other's pid
+    # file. The OS releases the mutex when the holding process dies.
+    global _INSTANCE_MUTEX
+    _INSTANCE_MUTEX = k32.CreateMutexW(None, False, "Global\\G9ClickEffectRunning")
+    if ctypes.get_last_error() == 183:      # ERROR_ALREADY_EXISTS
+        return
+
     masters, skipped = load_pressed_set()
     if not masters:
         sys.exit("no swappable roles installed - run install_cursors.py first")
